@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r echo=FALSE}
 USER <- 'root'
-PASSWORD <- 'atiyah111'
+# PASSWORD <- 'BLANK'
 HOST <- 'localhost'
 DBNAME <- 'world'
 setwd("C:/Users/jpbra/Desktop/uni/SEM4/data science/assignments")
