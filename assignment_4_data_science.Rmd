@@ -1,0 +1,606 @@
+---
+title: "Assignment 4"
+author: "Jesse Braid"
+date: "25 November 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+```{r}
+
+
+# this function displays the number of unique values in each column
+
+num_unique_vals <- function(data) {
+  for (i in colnames(data)) {
+    print(paste(i, "has", dim(unique(data[i]))[[1]], "unique value(s)", sep=" "))
+  }
+}
+
+
+# this function returns the names of all columns containing NAs
+
+get_NA_cols <- function(data) {
+  NA_cols <- NULL
+  for (i in colnames(data)) {
+	  if (sum(is.na(data[i])) > 0) {
+		  NA_cols <- c(NA_cols, i)
+		}
+  }
+  return(NA_cols)
+}
+
+# the function below displays the number of NAs in each column
+# this will be useful when deciding what to do with NAs
+
+num_NAs_by_col <- function(data) {
+  for (i in get_NA_cols(data)) {
+    print(paste(sum(is.na(loans[i])), "NAs in", i, sep=" "))
+  }
+}
+
+
+# num_NAs_by_row
+
+
+# if a column has a small fraction of NA's, remove the corresponding rows:
+
+drop_small_NAs <- function(data) {
+  drops <- NULL
+  for (i in get_NA_cols(data)) {
+    if (sum(is.na(data[i]))/dim(data)[[1]] < 0.1) {
+      # drop the smalls
+      # do i need to do here complete.cases(col's with small NA's) ?
+    }
+  }
+}
+
+# drop columns with lots of NA's:
+
+drop_big_NAs <- function(data) {
+  drops <- NULL
+  for (i in get_NA_cols(data)) {
+    if (sum(is.na(data[i]))/dim(data)[[1]] > 0.5) {
+      drops <- c(drops, i)
+    }
+  }
+}
+
+
+# drop_single_valued_cols
+
+
+# check if there are factors with more than two levels
+
+exist_multi_factors <- function(data) {
+  for (i in colnames(data)) {
+    if (is.factor(eval(parse(text=paste("data$", i, sep = "")))) 
+        & length(unique(eval(parse(text=paste("data$", i, sep = ""))))) > 2  ) {
+      return(TRUE)
+      }
+    return(FALSE)
+    }
+  }  
+
+# display all factor columns with more than two levels
+
+display_multi_factors <- function(data) {
+  for (i in colnames(data)) {
+    if (is.factor(eval(parse(text=paste("data$", i, sep = "")))) & length(unique(eval(parse(text=paste("data$", i, sep = ""))))) > 2  ) {
+      print(i)
+    }
+  }
+}
+
+# return column names containing numerics
+
+get_numeric_cols <- function(data) {
+  factor_cols <- NULL
+  for (i in colnames(data)) {
+    if (is.numeric(eval(parse(text=paste("data$", i, sep = ""))))) {
+      factor_cols <- c(factor_cols, i)
+    }
+  }
+  return(factor_cols)
+}
+
+# return column names containing factors
+
+get_factor_cols <- function(data) {
+  factor_cols <- NULL
+  for (i in colnames(data)) {
+    if (is.factor(eval(parse(text=paste("data$", i, sep = ""))))) {
+      factor_cols <- c(factor_cols, i)
+    }
+  }
+  return(factor_cols)
+}
+
+
+# drop_correlated_cols
+
+# make_training_subset
+
+# etc
+
+```
+
+
+```{r IMPORT, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+library(cluster)
+library(caret)
+library(tidyverse)
+library(NbClust)
+
+setwd("C:/Users/jpbra/Desktop/uni/SEM4/data science/assignments")
+loans <- read.csv("loan.csv")
+
+NA_cols <- c()
+
+for (i in colnames(loans)) {
+	if (sum(is.na(loans[i])) > 0) {
+		NA_cols <- c(NA_cols, i)
+		}
+}
+
+drops <- c("tot_coll_amt", "tot_cur_bal", "open_acc_6m", "open_il_6m", "open_il_12m", "open_il_24m", "total_bal_il", "il_util", "open_rv_12m", "open_rv_24m", "max_bal_bc", "all_util", "inq_fi", "total_rev_hi_lim", "mths_since_rcnt_il", "total_cu_tl", "inq_last_12m")
+
+drops <- c(drops, "id", "member_id", "url", "desc", "title")
+
+drops <- c(drops, "annual_inc_joint", "dti_joint", "verification_status_joint")
+loans <- loans[ , !(names(loans) %in% drops)]
+
+loans$delinq <- as.factor(ifelse(is.na(loans$mths_since_last_delinq), 0, 1))
+
+loans$record <- as.factor(ifelse(is.na(loans$mths_since_last_record), 0, 1))
+
+loans$major_derog <- as.factor(ifelse(is.na(loans$mths_since_last_major_derog), 0, 1))
+
+drops <- c(drops, "mths_since_last_delinq", "mths_since_last_record", "mths_since_last_major_derog")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+NA_cols <- NA_cols[!(NA_cols %in% drops)]
+
+drops <- c(drops, "out_prncp_inv", "total_pymnt_inv")
+
+drops <- c(drops, "grade", "sub_grade")
+
+drops <- c(drops, "policy_code")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+loans <- loans[complete.cases(loans), ]
+
+
+logical <- loans$last_credit_pull_d == "" | loans$earliest_cr_line == "" | loans$annual_inc == 0
+loans <- loans[!logical, ]
+
+
+drops_extra <- c("next_pymnt_d", "last_pymnt_d", "emp_title")
+loans <- loans[ , !(names(loans) %in% drops_extra)]
+
+good_indicators <- c("Current", "Issued", "Fully Paid", "Does not meet the credit policy. Status:Fully Paid")
+
+loans$default <- as.factor(ifelse(loans$loan_status %in% good_indicators, 0, 1))
+
+
+drops <- c(drops, "recoveries", "collection_recovery_fee")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+loans$out_prncp <- loans$loan_amnt - loans$total_rec_prncp
+
+
+earliest_cr_line <- strsplit(as.character(loans$earliest_cr_line), "-")
+
+
+earliest_cr_line.month <- vector(length=length(earliest_cr_line))
+earliest_cr_line.year <- vector(length=length(earliest_cr_line))
+
+
+
+for(i in 1:length(earliest_cr_line)) {
+	earliest_cr_line.month[i] <- earliest_cr_line[[i]][1]
+	earliest_cr_line.year[i] <- earliest_cr_line[[i]][2]
+}
+
+
+earliest_cr_line.month <- ifelse(earliest_cr_line.month == "Jan", 0/12, 
+			ifelse(earliest_cr_line.month == "Feb", 1/12, 
+			ifelse(earliest_cr_line.month == "Mar", 2/12, 
+			ifelse(earliest_cr_line.month == "Apr", 3/12, 
+			ifelse(earliest_cr_line.month == "May", 4/12, 
+			ifelse(earliest_cr_line.month == "Jun", 5/12, 
+			ifelse(earliest_cr_line.month == "Jul", 6/12, 
+			ifelse(earliest_cr_line.month == "Aug", 7/12, 
+			ifelse(earliest_cr_line.month == "Sep", 8/12, 
+			ifelse(earliest_cr_line.month == "Oct", 9/12, 
+			ifelse(earliest_cr_line.month == "Nov", 10/12, 11/12)))))))))))
+
+earliest_cr_line.year <- as.numeric(earliest_cr_line.year)
+
+earliest_cr_line <- earliest_cr_line.month + earliest_cr_line.year
+
+
+issue_d <- strsplit(as.character(loans$issue_d), "-")
+
+issue_d.month <- vector(length=length(issue_d))
+
+issue_d.year <- vector(length=length(issue_d))
+
+for(i in 1:length(issue_d)) {
+	issue_d.month[i] <- issue_d[[i]][1]
+	issue_d.year[i] <- issue_d[[i]][2]
+	}
+
+issue_d.month <- ifelse(issue_d.month == "Jan", 0/12, 
+			ifelse(issue_d.month == "Feb", 1/12, 
+			ifelse(issue_d.month == "Mar", 2/12, 
+			ifelse(issue_d.month == "Apr", 3/12, 
+			ifelse(issue_d.month == "May", 4/12, 
+			ifelse(issue_d.month == "Jun", 5/12, 
+			ifelse(issue_d.month == "Jul", 6/12, 
+			ifelse(issue_d.month == "Aug", 7/12, 
+			ifelse(issue_d.month == "Sep", 8/12, 
+			ifelse(issue_d.month == "Oct", 9/12, 
+			ifelse(issue_d.month == "Nov", 10/12, 11/12)))))))))))
+
+issue_d.year <- as.numeric(issue_d.year)
+
+issue_d <- issue_d.month + issue_d.year
+
+
+loans$earliest_cr_line <- issue_d - earliest_cr_line
+
+last_credit_pull_d <- strsplit(as.character(loans$last_credit_pull_d), "-")
+
+last_credit_pull_d.month <- vector(length=length(last_credit_pull_d))
+
+last_credit_pull_d.year <- vector(length=length(last_credit_pull_d))
+
+for(i in 1:length(last_credit_pull_d)) {
+	last_credit_pull_d.month[i] <- last_credit_pull_d[[i]][1]
+	last_credit_pull_d.year[i] <- last_credit_pull_d[[i]][2]
+	}
+
+last_credit_pull_d.month <- ifelse(last_credit_pull_d.month == "Jan", 0/12, 
+			ifelse(last_credit_pull_d.month == "Feb", 1/12, 
+			ifelse(last_credit_pull_d.month == "Mar", 2/12, 
+			ifelse(last_credit_pull_d.month == "Apr", 3/12, 
+			ifelse(last_credit_pull_d.month == "May", 4/12, 
+			ifelse(last_credit_pull_d.month == "Jun", 5/12, 
+			ifelse(last_credit_pull_d.month == "Jul", 6/12, 
+			ifelse(last_credit_pull_d.month == "Aug", 7/12, 
+			ifelse(last_credit_pull_d.month == "Sep", 8/12, 
+			ifelse(last_credit_pull_d.month == "Oct", 9/12, 
+			ifelse(last_credit_pull_d.month == "Nov", 10/12, 11/12)))))))))))
+
+last_credit_pull_d.year <- as.numeric(last_credit_pull_d.year)
+
+loans$last_credit_pull_d <- 2016.0 - (last_credit_pull_d.month + last_credit_pull_d.year)
+
+
+loans$issue_month <- as.factor(ifelse(grepl("Jan", loans$issue_d), "Jan", 
+				ifelse(grepl("Feb", loans$issue_d), "Feb", 
+				ifelse(grepl("Mar", loans$issue_d), "Mar", 
+				ifelse(grepl("Apr", loans$issue_d), "Apr", 
+				ifelse(grepl("May", loans$issue_d), "May", 
+				ifelse(grepl("Jun", loans$issue_d), "Jun", 
+				ifelse(grepl("Jul", loans$issue_d), "Jul", 
+				ifelse(grepl("Aug", loans$issue_d), "Aug", 
+				ifelse(grepl("Sep", loans$issue_d), "Sep", 
+				ifelse(grepl("Oct", loans$issue_d), "Oct", 
+				ifelse(grepl("Nov", loans$issue_d), "Nov", "Dec"))))))))))))
+
+
+
+bad_zip_codes <- c()
+
+for (i in unique(loans$zip_code)) {
+	if(sum(loans$zip_code == i & loans$default == "1") > 300) {
+		bad_zip_codes <- c(bad_zip_codes, i)
+		}
+	}
+
+loans$bad_zip_code <- as.factor(ifelse(loans$zip_code %in% bad_zip_codes, 1, 0))
+
+
+
+bad_states <- c()
+
+for(i in unique(loans$addr_state)) {
+	if(sum(loans$addr_state == i & loans$default == "1")/sum(loans$addr_state == i) > 0.08) {
+		bad_states <- c(bad_states, i)
+		}
+	}
+
+
+
+loans$bad_state <- as.factor(ifelse(loans$addr_state %in% bad_states, 1, 0))
+
+
+
+loans$own_or_mortgage <- as.factor(ifelse(loans$home_ownership == "OWN" | loans$home_ownership == "MORTGAGE", 1, 0))
+
+loans$emp_more_2_years <- as.factor(ifelse(loans$emp_length == "n/a" | loans$emp_length == "< 1 year" | loans$emp_length == "1 year" | loans$emp_length == "2 years", 0, 1))
+
+loans$not_fully_funded <- as.factor(ifelse(loans$loan_amnt - loans$funded_amnt > 0, 1, 0))
+
+loans$not_fully_inv_funded <- as.factor(ifelse(loans$funded_amnt - loans$funded_amnt_inv > 0, 1, 0))
+
+loans$last_pymnt_lower_installment <- as.factor(ifelse(loans$last_pymnt_amnt - loans$installment < 0, 1, 0))
+
+
+
+loans$out_prncp_vs_income <- loans$out_prncp / loans$annual_inc
+
+loans$loan_amnt_vs_income <- loans$loan_amnt / loans$annual_inc
+
+loans$installment_vs_income <- loans$installment / loans$annual_inc
+
+
+
+loans$pct_prncp_rec <- loans$total_rec_prncp / loans$loan_amnt
+
+
+
+loans$low_pct_prncp_rec <- as.factor(ifelse(loans$pct_prncp_rec < 0.5, 1, 0))
+
+
+
+drops <- c(drops, "loan_status", "last_credit_pull_d", "funded_amnt", "funded_amnt_inv", "installment", "emp_length", "home_ownership", "zip_code", "addr_state", "issue_d", "last_pymnt_amnt", "out_prncp", "total_rec_prncp", "pct_prncp_rec")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+bad_purposes <- NULL
+
+for (i in unique(loans$purpose)) {
+	if ((sum(loans$purpose == i & loans$default == "1")/sum(loans$purpose == i)) > 0.10) {
+		bad_purposes <- c(bad_purposes, i)
+		}
+	}
+
+loans$bad_purpose <- as.factor(ifelse(loans$purpose %in% bad_purposes, 1, 0))
+
+
+first_half <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun")
+
+loans$issued_first_half <- as.factor(ifelse(loans$issue_month %in% first_half, 1, 0))
+
+
+loans$verified <- as.factor(ifelse(loans$verification_status == "Not Verified", 0, 1))
+
+
+drops <- c("region", "purpose", "issue_month", "verification_status")
+
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+drops <- c(drops, "loan_amnt_vs_income", "record")
+
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+# NOTE: NEW
+
+loans <- select(loans, -not_fully_inv_funded)
+
+
+
+```
+
+
+=============================================================================================
+=============================================================================================
+=============================================================================================
+=============================================================================================
+=============================================================================================
+=============================================================================================
+=============================================================================================
+
+
+
+In order to perform clustering there are a number of questions we need to answer. A non-exhaustive list is given below:
+
+1. Which variables should we use to create clusters?
+2. Should we normalise our data?
+3. How should we handle categorical data?
+4. Which ``dissimilarity'' measure to use / which clustering algorithm to use: k-means, k-median, k-mode, or something else?
+5. Should we use a sample of the full data set, and if so, what sample size is ``adequate''?
+
+And finally,
+
+6. What should $k$ be? (see 14.3.11 in ESL)
+
+# 1. Feature selection
+
+The first and last questions are arguably the most difficult, and they are also potentially related (in the sense that the optimal $k$ could vary with the features used). In fact this last point is quite obvious if we consider the following artificial data set:
+
+```{r}
+
+x <- c(rep(0,40),rep(1,40))
+set.seed(1)
+y <- rnorm(20, 5, 0.05)
+set.seed(1)
+y <- c(y, rnorm(60,0,0.05))
+df <- data.frame(x,y)
+
+```
+
+We can see that, if we use both features, there are three ``natural'' clusterings; but if we ignored the $x$ feature, there would only be two natural clusterings.
+
+(Why select features? Curse of dimensionality and ``interpretability''. Also noise features--for given $k$.)
+
+There are numerous possible ways to approach the problem of feature selection. In the literature on clustering, two main types of approaches are identified: filters and wrappers. In addition, there are so-called``hybrid'' models which combine filters and wrappers.
+
+Traditional approach to feature selection is based on data variance: find directions in the feature space along which the data varies the most. To illustrate this idea, suppose we had a feature space consisting of two features $(X_1, X_2)$ drawn from a bivariate Gaussian distribution. 
+
+```{r}
+#PCA: bivariate gaussian
+
+
+```
+
+One of the downsides of this approach is that the results are not necessarily easy to interpret. In our data there are $36$ features, and each principal component will be a linear combination of all $36$ of them, i.e. each principal component will be of the form
+\[
+PCA_i = \sum_{j=1}^{36} \alpha_{ij} X_j
+\]
+From a business point of view, such a linear combination of features does not necessarily have any obvious interpretation or meaning--it is essentially a purely mathematical construct.
+
+A wrapper approach works as follows: we start with some value of $k$, and then select different subsets of the features. For each choice of features, we separate the feature space into $k$ clusters. We then choose whichever feature subset gives the most ``natural'' clustering according to some criterion.
+
+Obviously, a major drawback of this approach is the need to pre-specify a value of $k$. Furthermore, the approach is very computationally expensive (for $p$ features there are $2^p - 1$ possible subsets of features). Indeed, for very high-dimensional feature spaces ($p$ on  the order of $1,000$ or more), it is not feasible to consider every possible subset of features.
+
+The bias inherent in pre-specifying $k$ is quite obvious in our case. If we set $k=2$, then we could get ``perfect'' clusters by choosing any single dichotomous variable (e.g., own_or_mortgage).
+
+```{r}
+
+# k = 2 (!)
+
+# own_or_mortgage
+
+```
+
+But if $k =3 $ or more we've made a mistake here.:
+
+```{r}
+
+# own_or_mortgage
+
+```
+
+The papers http://www.public.asu.edu/~huanliu/papers/pakdd00clu.pdf etc. discuss this issue further.
+
+Given that we have no ``a priori'' idea how many natural groupings there might be in our data (and thus no idea about a reasonable value of $k$), this approach does not seem suitable.
+
+Furthermore, it is not immediately obvious that any of the variables can be ignored. Therefore, I will start by finding clusters in the full feature space. Once a value of $k$ has been chosen, I will then look at methods for reducing features:
+
+I will use Laplacian score to select features and then perform k-means clustering on the selected features. We will then investigate the hybrid model of Roth and Lange, and also the ``sparse k-means'' framework of Witten and Tibshirani. The latter is analogous to the well-known regularisation methods for regression due to Hastie and Tibshirani, in that it imposes a penalty on the size of the weights. This mechanism can actually select features, i.e. reduce the weights of certain features to zero, just as the lasso does in the context of regression.
+
+Out of interest we will also look into PCA.
+
+# 2. Scaling and dissimilarity measures
+
+[A word or two here]
+
+[[As I mentioned previously, we don't really have any criterion for choosing among the different measures; if $k$ etc. were fixed, then maybe we could]]
+
+# 3. Criteria for selecting $k$
+
+The usual metric to evaluate the groupings is the ``between-cluster variance''. Equivalently, the within-cluster variance.
+
+Let's consider what happens if we use all of the variables in clustering.
+
+```{r eval=FALSE}
+
+# first take a sample of the full data set--at this stage this is just for illustrative purposes
+
+set.seed(1)
+sample <- sample(nrow(loans), 1000)
+loans.sample <- loans[sample,]
+
+# now let's construct some clusters
+
+between_ss <- vector(length=10)
+
+ptm <- proc.time()
+
+for (k in seq(1, 201, 10)) {
+  set.seed(k)
+  clusters <- kmeans(loans.sample, centers = k, nstart = 25)
+  print(clusters$betweenss)
+  between_ss[k] <- clusters$betweenss
+}
+
+proc.time() - ptm
+
+
+```
+
+A common method for selecting $k$ is to look for a so-called "hinge" in the graph of the between-cluster variance versus $k$ [[example plot]]. To illustrate the logic behind this method, consider the following artifically generated data set:
+
+```{r}
+
+
+
+```
+
+A visual inspection of the data makes it clear that there are four ``natural'' groupings. To see what happens as $k$ is varied:
+
+```{r}
+
+#plot
+
+```
+
+Here, the hinge method works well: there is a clear hinge at $k=4$ which is, intuitively, the ``correct'' number of clusters.
+
+However this method does not always work so well. The gap index of Hastie et al. is an attempt to quantify this criterion so that it relies less on visual inspection and guesswork.
+
+There are many other criteria for selecting $k$; these are described in the NbClust vignette.
+
+# 4. Sample size considerations
+
+Clustering can be quite computationally expensive. As with $k$-nearest neighbours classification.
+It is thus important that we select a manageable subset of the full data. In the example above we used $N = 1000$ rows. One way to measure whether a given sample is ``acceptable'' is to compare the shape of the within_SS versus $k$ curve to the full data set:
+
+```{r}
+
+for (N in seq(1000,20000,1000)) {
+  #do some basic thing with like k = 10, 50, 100, 150....
+  #obviously will take a while
+}
+
+
+```
+
+[[I feel that $N = 10000$ should be sufficient...]]
+[[Of course, we can attempt to quantify this with the LLN]]
+
+# 5. Final clusters
+
+So we use a sample size of $N = 10000$ and start with the full feature set.
+
+```{r}
+
+set.seed(1)
+sample <- sample(nrow(loans), 10000)
+
+#etc.
+
+```
+
+We can see that the maximum SS occurs for very high $k$. This is not so great from the point of view of interpretability. We would like to be able to find some natural grouping
+
+
+Let's get into the Laplacian.
+
+```{r}
+
+#i'm projecting 100+ lines of code here
+
+```
+
+And then a discussion on spare k-means and other hybrids.
+
+# Evaluation
+
+As discussed above the metric we use to evaluate our clusters is the between-cluster sum of squares. [etc.]
+We also note that maximising the between-cluster sum of squares is equivalent to minimising the within-cluster sum of squares, as shown below:
+$$ A = B$$
+
+
+Go for 700+
+
+

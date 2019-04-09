@@ -1,0 +1,630 @@
+---
+title: "Assignment 1"
+author: "Jesse Braid"
+date: "15 November 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r echo=FALSE}
+USER <- 'root'
+PASSWORD <- 'atiyah111'
+HOST <- 'localhost'
+DBNAME <- 'world'
+setwd("C:/Users/jpbra/Desktop/uni/SEM4/data science/assignments")
+loans <- read.csv("loan.csv")
+```
+
+
+## I. Exploratory data analysis and data cleaning
+
+```{r, warning=FALSE, message=FALSE}
+# read the data
+library(RMySQL)
+statement <- "SELECT * FROM loan;"
+# db <- dbConnect(MySQL(), user = USER, password = PASSWORD, host = HOST, dbname = DBNAME, port=3306)
+# loans <- dbGetQuery(db, statement = statement)
+# dbDisconnect(db)
+```
+
+
+We first do a bit of exploratory data analysis to get a sense for the data.
+
+
+```{r}
+str(loans)
+```
+
+
+We can see that there are some NA's. Also, a few factors have empty values. Let us find all the columns which contain NAs:
+
+
+```{r}
+NA_cols <- c()
+
+for (i in colnames(loans)) {
+	if (sum(is.na(loans[i])) > 0) {
+		NA_cols <- c(NA_cols, i)
+		}
+	}
+
+NA_cols
+```
+
+
+Let's see how many NA's are in each of these columns:
+
+
+```{r}
+for (i in NA_cols) {
+	cat(sum(is.na(loans[i])), "NAs in", i, sep=" ", fill=TRUE)
+	}
+```
+
+Note the very large number of NA's in the last columns (from open_acc_6m to inq_last_12m). It turns out that these attributes were only recorded from November 2015 onwards, hence most of this is genuinely missing data (cf https://forum.lendacademy.com/index.php?topic=3507.0). 
+
+So we can remove these columns:
+
+
+```{r}
+drops <- c("tot_coll_amt", "tot_cur_bal", "open_acc_6m", "open_il_6m", "open_il_12m", "open_il_24m", "total_bal_il", "il_util", "open_rv_12m", "open_rv_24m", "max_bal_bc", "all_util", "inq_fi", "total_rev_hi_lim", "mths_since_rcnt_il", "total_cu_tl", "inq_last_12m")
+```
+
+
+Furthermore, the following columns could not logically be expected to have any relationship to the default status, so we remove them as well:
+
+
+```{r}
+drops <- c(drops, "id", "member_id", "url", "desc", "title")
+```
+
+
+The vast majority of loans are individual, as we can see here:
+
+
+```{r}
+mean(loans$application_type == "INDIVIDUAL")
+```
+
+
+Therefore we simply remove the columns which are specific to joint applications:
+
+
+```{r}
+drops <- c(drops, "annual_inc_joint", "dti_joint", "verification_status_joint")
+loans <- loans[ , !(names(loans) %in% drops)]
+```
+
+
+Let's look at the remaining columns with NA's:
+
+
+```{r}
+NA_cols <- NA_cols[!(NA_cols %in% drops)]
+
+for (i in NA_cols) {
+	cat(sum(is.na(loans[i])), "NAs in", i, sep=" ", fill=TRUE)
+	}
+```
+
+
+There are three columns with a very large number of NA's, but these NA's might be informative, so we transform them:
+
+
+```{r}
+# create categorical variables for delinquencies, records, major derogatories
+
+loans$delinq <- as.factor(ifelse(is.na(loans$mths_since_last_delinq), 0, 1))
+
+loans$record <- as.factor(ifelse(is.na(loans$mths_since_last_record), 0, 1))
+
+loans$major_derog <- as.factor(ifelse(is.na(loans$mths_since_last_major_derog), 0, 1))
+```
+
+
+And then we remove the old columns:
+
+
+```{r}
+drops <- c(drops, "mths_since_last_delinq", "mths_since_last_record", "mths_since_last_major_derog")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+NA_cols <- NA_cols[!(NA_cols %in% drops)]
+```
+
+
+We remove out_prncp_inv and total_pymnt_inv since they are highly correlated with out_prncp and total_pymnt (respectively), and thus won't give us much additional information:
+
+
+```{r}
+# look at the correlations
+
+cor(loans$out_prncp, loans$out_prncp_inv)
+
+cor(loans$total_pymnt, loans$total_pymnt_inv)
+
+# these are very high, so let's remove columns
+
+drops <- c(drops, "out_prncp_inv", "total_pymnt_inv")
+```
+
+
+Also, as explained on the LendingClub website, the grade and sub-grade are functions of the interest rate. Therefore we don't need the grade/sub-grade if we have the interest rate (in fact, the interest rate gives us more information).
+Thus we can safely remove these columns:
+
+
+```{r}
+drops <- c(drops, "grade", "sub_grade")
+```
+
+
+Finally, we can also delete policy_code, since it only takes one value and is thus non-informative:
+
+
+```{r}
+unique(loans$policy_code)
+
+# only one value, so remove it
+
+drops <- c(drops, "policy_code")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+```
+
+
+For the remaining NA's, we simply delete the rows they are in:
+
+
+```{r}
+loans <- loans[complete.cases(loans), ]
+```
+
+
+Also, we delete the empty values from last_credit_pull_d and earliest_cr_line, and the 0's from annual_inc (because they will cause trouble down the line):
+
+
+```{r}
+logical <- loans$last_credit_pull_d == "" | loans$earliest_cr_line == "" | loans$annual_inc == 0
+loans <- loans[!logical, ]
+```
+
+
+I'm also going to delete next_pymnt_d, last_pymnt_d, and emp_title: 
+
+
+```{r}
+drops_extra <- c("next_pymnt_d", "last_pymnt_d", "emp_title")
+loans <- loans[ , !(names(loans) %in% drops_extra)]
+```
+
+
+
+```{r echo=FALSE}
+# (leaving in total_pymnt and total_rec_int ... guess there's no harm)
+# (also removed  tot_coll_amt, tot_cur_bal, total_rev_hi_lim in the above)
+```
+
+
+
+## II. Creation of new variables
+
+Now that the data are relatively clean, we begin the process of modifying variables and creating new categorical variables.
+
+Obviously, we need a "default" attribute, so we create that first. Let's look at the different loan statuses:
+
+
+```{r}
+unique(loans$loan_status)
+```
+
+
+If a loan is listed as "Current", "Issued", or "Fully Paid", we say that it has not defaulted; every other status we call a default.
+
+
+```{r}
+good_indicators <- c("Current", "Issued", "Fully Paid", "Does not meet the credit policy. Status:Fully Paid")
+
+loans$default <- as.factor(ifelse(loans$loan_status %in% good_indicators, 0, 1))
+
+# alternatively, we could remove "current" and "issued" rows since they're sort of neither
+```
+
+
+Since we're trying to predict defaults we'll have to remove recoveries:
+
+
+```{r}
+drops <- c(drops, "recoveries", "collection_recovery_fee")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+```
+
+
+Also, most defaulters have out_prncp = 0 (because the debt has been recovered or written off):
+
+
+```{r}
+sum(loans$out_prncp == 0 & loans$default == "1")/sum(loans$default == "1")
+```
+
+
+Hence we can't really use this to predict default status. What we can do instead is re-define the outstanding principal in the following way:
+
+
+```{r}
+loans$out_prncp <- loans$loan_amnt - loans$total_rec_prncp
+```
+
+
+This tells us the "real" outstanding principal of defaulters, before the outstanding principal was recovered or written off.
+
+We now convert the dates (earliest_cr_line, last_credit_pull_d) to numerics, with months expressed in fractions of a year. First we do earliest_cr_line:
+
+
+```{r}
+earliest_cr_line <- strsplit(as.character(loans$earliest_cr_line), "-")
+
+# initialise the month and year vectors (this will make the for loop much faster)
+
+earliest_cr_line.month <- vector(length=length(earliest_cr_line))
+earliest_cr_line.year <- vector(length=length(earliest_cr_line))
+
+# fill them in
+
+for(i in 1:length(earliest_cr_line)) {
+	earliest_cr_line.month[i] <- earliest_cr_line[[i]][1]
+	earliest_cr_line.year[i] <- earliest_cr_line[[i]][2]
+	}
+
+```
+
+
+Then, we convert the months to fractions of a year, convert years to numerics, and add them together:
+
+
+```{r}
+earliest_cr_line.month <- ifelse(earliest_cr_line.month == "Jan", 0/12, 
+			ifelse(earliest_cr_line.month == "Feb", 1/12, 
+			ifelse(earliest_cr_line.month == "Mar", 2/12, 
+			ifelse(earliest_cr_line.month == "Apr", 3/12, 
+			ifelse(earliest_cr_line.month == "May", 4/12, 
+			ifelse(earliest_cr_line.month == "Jun", 5/12, 
+			ifelse(earliest_cr_line.month == "Jul", 6/12, 
+			ifelse(earliest_cr_line.month == "Aug", 7/12, 
+			ifelse(earliest_cr_line.month == "Sep", 8/12, 
+			ifelse(earliest_cr_line.month == "Oct", 9/12, 
+			ifelse(earliest_cr_line.month == "Nov", 10/12, 11/12)))))))))))
+
+earliest_cr_line.year <- as.numeric(earliest_cr_line.year)
+
+earliest_cr_line <- earliest_cr_line.month + earliest_cr_line.year
+```
+
+
+Then do the same for issue_d:
+
+
+```{r}
+issue_d <- strsplit(as.character(loans$issue_d), "-")
+
+issue_d.month <- vector(length=length(issue_d))
+
+issue_d.year <- vector(length=length(issue_d))
+
+for(i in 1:length(issue_d)) {
+	issue_d.month[i] <- issue_d[[i]][1]
+	issue_d.year[i] <- issue_d[[i]][2]
+	}
+
+issue_d.month <- ifelse(issue_d.month == "Jan", 0/12, 
+			ifelse(issue_d.month == "Feb", 1/12, 
+			ifelse(issue_d.month == "Mar", 2/12, 
+			ifelse(issue_d.month == "Apr", 3/12, 
+			ifelse(issue_d.month == "May", 4/12, 
+			ifelse(issue_d.month == "Jun", 5/12, 
+			ifelse(issue_d.month == "Jul", 6/12, 
+			ifelse(issue_d.month == "Aug", 7/12, 
+			ifelse(issue_d.month == "Sep", 8/12, 
+			ifelse(issue_d.month == "Oct", 9/12, 
+			ifelse(issue_d.month == "Nov", 10/12, 11/12)))))))))))
+
+issue_d.year <- as.numeric(issue_d.year)
+
+issue_d <- issue_d.month + issue_d.year
+```
+
+Then find the difference between the loan's issue date and the borrower's earliest credit line:
+
+```{r}
+loans$earliest_cr_line <- issue_d - earliest_cr_line
+```
+
+
+
+We can do the same thing with last_credit_pull_d and subtract the difference between the current date and that date (in this case we'd say "current date" = Jan 2016).
+
+```{r}
+last_credit_pull_d <- strsplit(as.character(loans$last_credit_pull_d), "-")
+
+last_credit_pull_d.month <- vector(length=length(last_credit_pull_d))
+
+last_credit_pull_d.year <- vector(length=length(last_credit_pull_d))
+
+for(i in 1:length(last_credit_pull_d)) {
+	last_credit_pull_d.month[i] <- last_credit_pull_d[[i]][1]
+	last_credit_pull_d.year[i] <- last_credit_pull_d[[i]][2]
+	}
+
+last_credit_pull_d.month <- ifelse(last_credit_pull_d.month == "Jan", 0/12, 
+			ifelse(last_credit_pull_d.month == "Feb", 1/12, 
+			ifelse(last_credit_pull_d.month == "Mar", 2/12, 
+			ifelse(last_credit_pull_d.month == "Apr", 3/12, 
+			ifelse(last_credit_pull_d.month == "May", 4/12, 
+			ifelse(last_credit_pull_d.month == "Jun", 5/12, 
+			ifelse(last_credit_pull_d.month == "Jul", 6/12, 
+			ifelse(last_credit_pull_d.month == "Aug", 7/12, 
+			ifelse(last_credit_pull_d.month == "Sep", 8/12, 
+			ifelse(last_credit_pull_d.month == "Oct", 9/12, 
+			ifelse(last_credit_pull_d.month == "Nov", 10/12, 11/12)))))))))))
+
+last_credit_pull_d.year <- as.numeric(last_credit_pull_d.year)
+
+loans$last_credit_pull_d <- 2016.0 - (last_credit_pull_d.month + last_credit_pull_d.year)
+```
+
+
+We also convert issue_d to month:
+
+
+```{r}
+loans$issue_month <- as.factor(ifelse(grepl("Jan", loans$issue_d), "Jan", 
+				ifelse(grepl("Feb", loans$issue_d), "Feb", 
+				ifelse(grepl("Mar", loans$issue_d), "Mar", 
+				ifelse(grepl("Apr", loans$issue_d), "Apr", 
+				ifelse(grepl("May", loans$issue_d), "May", 
+				ifelse(grepl("Jun", loans$issue_d), "Jun", 
+				ifelse(grepl("Jul", loans$issue_d), "Jul", 
+				ifelse(grepl("Aug", loans$issue_d), "Aug", 
+				ifelse(grepl("Sep", loans$issue_d), "Sep", 
+				ifelse(grepl("Oct", loans$issue_d), "Oct", 
+				ifelse(grepl("Nov", loans$issue_d), "Nov", "Dec"))))))))))))
+
+```
+
+
+We separate zip codes into "bad" and "good" categories (where "bad" is defined as: number of defaults in that zip code is greater than 300). 
+
+```{r}
+# somewhat ad hoc
+
+bad_zip_codes <- c()
+
+for (i in unique(loans$zip_code)) {
+	if(sum(loans$zip_code == i & loans$default == "1") > 300) {
+		bad_zip_codes <- c(bad_zip_codes, i)
+		}
+	}
+
+loans$bad_zip_code <- as.factor(ifelse(loans$zip_code %in% bad_zip_codes, 1, 0))
+```
+
+
+We do a similar thing for states. We'll first look at default rates by state:
+
+
+```{r}
+for(i in unique(loans$addr_state)) {
+	cat("Default rate in", i, ":", sum(loans$addr_state == i & loans$default == "1")/sum(loans$addr_state == i), sep = " ", fill=TRUE)
+	}
+```
+
+Let's say that "bad states" are those with default rates greater than 8%:
+
+
+```{r}
+bad_states <- c()
+
+for(i in unique(loans$addr_state)) {
+	if(sum(loans$addr_state == i & loans$default == "1")/sum(loans$addr_state == i) > 0.08) {
+		bad_states <- c(bad_states, i)
+		}
+	}
+
+
+loans$bad_state <- as.factor(ifelse(loans$addr_state %in% bad_states, 1, 0))
+```
+
+
+We can make some other dichotomous variables (these are reasonably self-explanatory):
+
+
+```{r}
+loans$own_or_mortgage <- as.factor(ifelse(loans$home_ownership == "OWN" | loans$home_ownership == "MORTGAGE", 1, 0))
+
+loans$emp_more_2_years <- as.factor(ifelse(loans$emp_length == "n/a" | loans$emp_length == "< 1 year" | loans$emp_length == "1 year" | loans$emp_length == "2 years", 0, 1))
+
+loans$not_fully_funded <- as.factor(ifelse(loans$loan_amnt - loans$funded_amnt > 0, 1, 0))
+
+loans$not_fully_inv_funded <- as.factor(ifelse(loans$funded_amnt - loans$funded_amnt_inv > 0, 1, 0))
+
+loans$last_pymnt_lower_installment <- as.factor(ifelse(loans$last_pymnt_amnt - loans$installment < 0, 1, 0))
+```
+
+
+And we will create some variables "relative" to income:
+
+
+```{r}
+loans$out_prncp_vs_income <- loans$out_prncp / loans$annual_inc
+
+loans$loan_amnt_vs_income <- loans$loan_amnt / loans$annual_inc
+
+loans$installment_vs_income <- loans$installment / loans$annual_inc
+```
+
+
+We expect that the percentage of premium received is going to be more informative than the "absolute" amount, so we convert to percentages:
+
+```{r}
+loans$pct_prncp_rec <- loans$total_rec_prncp / loans$loan_amnt
+```
+
+
+We will say that the percentage received is "low" if it is less than 50% (this is somewhat ad hoc, and could be varied):
+
+
+```{r}
+loans$low_pct_prncp_rec <- as.factor(ifelse(loans$pct_prncp_rec < 0.5, 1, 0))
+```
+
+
+Finally we remove the old columns:
+
+
+```{r}
+drops <- c(drops, "loan_status", "last_credit_pull_d", "funded_amnt", "funded_amnt_inv", "installment", "emp_length", "home_ownership", "zip_code", "addr_state", "issue_d", "last_pymnt_amnt", "out_prncp", "total_rec_prncp", "pct_prncp_rec")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+```
+
+
+
+## III. Tree building
+
+
+We now begin the process of building a decision tree.
+
+Since we are interested in how well the tree predicts the default status of new customers, we train the tree on a sample of the full data set:
+
+```{r}
+library(tree)
+library(rpart)
+library(maptree)
+
+# take a random sample of 70% of the loans data for the training set
+
+set.seed(3)
+
+train <- sample(nrow(loans), floor(0.7*nrow(loans)))
+
+# create the train and test subsets:
+
+loans.train <- loans[train, ]
+
+loans.test <- loans[-train, ]
+```
+
+
+Now let's build our tree. We make the following tree building function:
+
+```{r}
+build_tree <- function(formula, data, package="tree", minsplit=1, cp=0.001) {
+	if (package == "rpart") return(rpart(formula = formula, data = data, control = rpart.control(minsplit = minsplit, cp = cp)))
+	else if (package == "tree") return(tree(formula = formula, data = data))
+	else print("Unknown package specified")
+}
+```
+
+
+We first fit the tree using all variables and the tree package:
+
+
+```{r}
+tree.loans = build_tree(default ~ ., data=loans.train)
+
+summary(tree.loans)
+```
+
+
+
+Let's see how well our tree does on the test data. First, we will create a prediction function:
+
+
+
+```{r}
+tree.predict <- function(predictor, data, type="class") {
+	return(predict(object = predictor, newdata = data, type = type))
+	}
+```
+
+
+Now let's look at the predictions our tree makes on the test data:
+
+
+```{r}
+tree_preds <- tree.predict(predictor=tree.loans, data=loans.test)
+
+table(Predicted = tree_preds, Actual = loans.test$default)
+
+# overall accuracy:
+
+mean(loans.test$default == tree_preds)
+
+# true positive rate:
+
+1911/(1911+18177)
+
+```
+
+
+So overall our tree classifies 92.78% of individuals correctly. However, it only classifies 9.51% of defaulters correctly (the other 90.49% of defaulters are incorrectly classified as "non-defaulters").
+
+This is not so great, but it's still an improvement over having no model at all, since the "null model" of classifying everyone as a non-defaulter has about the same overall accuracy while classifying 0% of defaulters correctly.
+
+Let's see how much better we can do with a bigger tree. To build this, we'll use rpart (so in our build_tree function we specificy package = "rpart"):
+
+
+```{r}
+tree.loans <- build_tree(default ~ ., data = loans.train, package = "rpart", minsplit = 100, cp = 0.0001)
+
+tree_preds <- tree.predict(tree.loans, data=loans.test)
+
+table(Predicted = tree_preds, Actual = loans.test$default)
+
+mean(tree_preds == loans.test$default)
+```
+
+
+This does reasonably well. The overall accuracy is 93.69% and the true positive rate is  5540/(5540+14548) = 27.58%. But the tree is very large and hard to interpret, so let's see if we can prune it down to a sensible size.
+
+
+```{r}
+pruned_tree <- clip.rpart(tree.loans, best = 32)
+
+pruned_tree_preds <- tree.predict(pruned_tree, loans.test)
+
+table(Predicted = pruned_tree_preds, Actual = loans.test$default)
+
+# overall accuracy:
+
+mean(pruned_tree_preds == loans.test$default)
+
+# sensitivity:
+
+2776/(2776+17312)
+```
+
+This does a bit better than our original tree, but it's still probably a bit too large for management. Let's see if we can get a decent result with 12 terminal nodes:
+
+```{r}
+pruned_tree <- clip.rpart(tree.loans, best = 12)
+
+pruned_tree_preds <- tree.predict(pruned_tree, loans.test)
+ 
+table(Predicted = pruned_tree_preds, Actual = loans.test$default)
+
+# overall accuracy:
+
+mean(pruned_tree_preds == loans.test$default)
+
+# sensitivity:
+
+2628/(2628+17460)
+```
+
+This tree is almost as good as the first pruned tree, but is quite a bit simpler, so this is the model we will present to management.

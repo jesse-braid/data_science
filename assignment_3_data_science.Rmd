@@ -1,0 +1,872 @@
+---
+title: "Assignment 3"
+author: "Jesse Braid"
+date: "15 November 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knirt root.dir ?
+```
+
+# 1. Introduction
+
+Load the relevant libraries:
+
+```{r Libraries, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(caret)
+library(pROC)
+library(ggplot2)
+```
+
+Define functions for cleaning data:
+
+```{r Functions, eval=FALSE, warning=FALSE, message=FALSE}
+
+# this function displays the number of unique values in each column
+
+num_unique_vals <- function(data) {
+  for (i in colnames(data)) {
+    print(paste(i, "has", dim(unique(data[i]))[[1]], "unique value(s)", sep=" "))
+  }
+}
+
+
+# this function returns the names of all columns containing NAs
+
+get_NA_cols <- function(data) {
+  NA_cols <- NULL
+  for (i in colnames(data)) {
+	  if (sum(is.na(data[i])) > 0) {
+		  NA_cols <- c(NA_cols, i)
+		}
+  }
+  return(NA_cols)
+}
+
+# the function below displays the number of NAs in each column
+# this will be useful when deciding what to do with NAs
+
+num_NAs_by_col <- function(data) {
+  for (i in get_NA_cols(data)) {
+    print(paste(sum(is.na(loans[i])), "NAs in", i, sep=" "))
+  }
+}
+
+
+# num_NAs_by_row
+
+
+# if a column has a small fraction of NA's, remove the corresponding rows:
+
+drop_small_NAs <- function(data) {
+  drops <- NULL
+  for (i in get_NA_cols(data)) {
+    if (sum(is.na(data[i]))/dim(data)[[1]] < 0.1) {
+      # drop the smalls
+      # do i need to do here complete.cases(col's with small NA's) ?
+    }
+  }
+}
+
+# drop columns with lots of NA's:
+
+drop_big_NAs <- function(data) {
+  drops <- NULL
+  for (i in get_NA_cols(data)) {
+    if (sum(is.na(data[i]))/dim(data)[[1]] > 0.5) {
+      drops <- c(drops, i)
+    }
+  }
+}
+
+
+# drop_single_valued_cols
+
+
+# check if there are factors with more than two levels
+
+exist_multi_factors <- function(data) {
+  for (i in colnames(data)) {
+    if (is.factor(eval(parse(text=paste("data$", i, sep = "")))) 
+        & length(unique(eval(parse(text=paste("data$", i, sep = ""))))) > 2  ) {
+      return(TRUE)
+      }
+    return(FALSE)
+    }
+  }  
+
+# display all factor columns with more than two levels
+
+display_multi_factors <- function(data) {
+  for (i in colnames(data)) {
+    if (is.factor(eval(parse(text=paste("data$", i, sep = "")))) & length(unique(eval(parse(text=paste("data$", i, sep = ""))))) > 2  ) {
+      print(i)
+    }
+  }
+}
+
+# return column names containing numerics
+
+get_numeric_cols <- function(data) {
+  factor_cols <- NULL
+  for (i in colnames(data)) {
+    if (is.numeric(eval(parse(text=paste("data$", i, sep = ""))))) {
+      factor_cols <- c(factor_cols, i)
+    }
+  }
+  return(factor_cols)
+}
+
+# return column names containing factors
+
+get_factor_cols <- function(data) {
+  factor_cols <- NULL
+  for (i in colnames(data)) {
+    if (is.factor(eval(parse(text=paste("data$", i, sep = ""))))) {
+      factor_cols <- c(factor_cols, i)
+    }
+  }
+  return(factor_cols)
+}
+
+
+# drop_correlated_cols
+
+# make_training_subset
+
+# etc
+
+```
+
+Then load in the data and clean it:
+
+```{r Cleaning, eval=FALSE, warning=FALSE, message=FALSE}
+
+ptm <- proc.time()
+
+setwd("C:/Users/jpbra/Desktop/uni/SEM4/data science/assignments")
+loans <- read.csv("loan.csv")
+
+NA_cols <- c()
+
+for (i in colnames(loans)) {
+	if (sum(is.na(loans[i])) > 0) {
+		NA_cols <- c(NA_cols, i)
+		}
+}
+
+drops <- c("tot_coll_amt", "tot_cur_bal", "open_acc_6m", "open_il_6m", "open_il_12m", "open_il_24m", "total_bal_il", "il_util", "open_rv_12m", "open_rv_24m", "max_bal_bc", "all_util", "inq_fi", "total_rev_hi_lim", "mths_since_rcnt_il", "total_cu_tl", "inq_last_12m")
+
+drops <- c(drops, "id", "member_id", "url", "desc", "title")
+
+drops <- c(drops, "annual_inc_joint", "dti_joint", "verification_status_joint")
+loans <- loans[ , !(names(loans) %in% drops)]
+
+loans$delinq <- as.factor(ifelse(is.na(loans$mths_since_last_delinq), 0, 1))
+
+loans$record <- as.factor(ifelse(is.na(loans$mths_since_last_record), 0, 1))
+
+loans$major_derog <- as.factor(ifelse(is.na(loans$mths_since_last_major_derog), 0, 1))
+
+drops <- c(drops, "mths_since_last_delinq", "mths_since_last_record", "mths_since_last_major_derog")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+NA_cols <- NA_cols[!(NA_cols %in% drops)]
+
+drops <- c(drops, "out_prncp_inv", "total_pymnt_inv")
+
+drops <- c(drops, "grade", "sub_grade")
+
+drops <- c(drops, "policy_code")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+loans <- loans[complete.cases(loans), ]
+
+
+logical <- loans$last_credit_pull_d == "" | loans$earliest_cr_line == "" | loans$annual_inc == 0
+loans <- loans[!logical, ]
+
+
+drops_extra <- c("next_pymnt_d", "last_pymnt_d", "emp_title")
+loans <- loans[ , !(names(loans) %in% drops_extra)]
+
+good_indicators <- c("Current", "Issued", "Fully Paid", "Does not meet the credit policy. Status:Fully Paid")
+
+loans$default <- as.factor(ifelse(loans$loan_status %in% good_indicators, 0, 1))
+
+
+drops <- c(drops, "recoveries", "collection_recovery_fee")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+loans$out_prncp <- loans$loan_amnt - loans$total_rec_prncp
+
+
+earliest_cr_line <- strsplit(as.character(loans$earliest_cr_line), "-")
+
+
+earliest_cr_line.month <- vector(length=length(earliest_cr_line))
+earliest_cr_line.year <- vector(length=length(earliest_cr_line))
+
+
+
+for(i in 1:length(earliest_cr_line)) {
+	earliest_cr_line.month[i] <- earliest_cr_line[[i]][1]
+	earliest_cr_line.year[i] <- earliest_cr_line[[i]][2]
+}
+
+
+earliest_cr_line.month <- ifelse(earliest_cr_line.month == "Jan", 0/12, 
+			ifelse(earliest_cr_line.month == "Feb", 1/12, 
+			ifelse(earliest_cr_line.month == "Mar", 2/12, 
+			ifelse(earliest_cr_line.month == "Apr", 3/12, 
+			ifelse(earliest_cr_line.month == "May", 4/12, 
+			ifelse(earliest_cr_line.month == "Jun", 5/12, 
+			ifelse(earliest_cr_line.month == "Jul", 6/12, 
+			ifelse(earliest_cr_line.month == "Aug", 7/12, 
+			ifelse(earliest_cr_line.month == "Sep", 8/12, 
+			ifelse(earliest_cr_line.month == "Oct", 9/12, 
+			ifelse(earliest_cr_line.month == "Nov", 10/12, 11/12)))))))))))
+
+earliest_cr_line.year <- as.numeric(earliest_cr_line.year)
+
+earliest_cr_line <- earliest_cr_line.month + earliest_cr_line.year
+
+
+issue_d <- strsplit(as.character(loans$issue_d), "-")
+
+issue_d.month <- vector(length=length(issue_d))
+
+issue_d.year <- vector(length=length(issue_d))
+
+for(i in 1:length(issue_d)) {
+	issue_d.month[i] <- issue_d[[i]][1]
+	issue_d.year[i] <- issue_d[[i]][2]
+	}
+
+issue_d.month <- ifelse(issue_d.month == "Jan", 0/12, 
+			ifelse(issue_d.month == "Feb", 1/12, 
+			ifelse(issue_d.month == "Mar", 2/12, 
+			ifelse(issue_d.month == "Apr", 3/12, 
+			ifelse(issue_d.month == "May", 4/12, 
+			ifelse(issue_d.month == "Jun", 5/12, 
+			ifelse(issue_d.month == "Jul", 6/12, 
+			ifelse(issue_d.month == "Aug", 7/12, 
+			ifelse(issue_d.month == "Sep", 8/12, 
+			ifelse(issue_d.month == "Oct", 9/12, 
+			ifelse(issue_d.month == "Nov", 10/12, 11/12)))))))))))
+
+issue_d.year <- as.numeric(issue_d.year)
+
+issue_d <- issue_d.month + issue_d.year
+
+
+loans$earliest_cr_line <- issue_d - earliest_cr_line
+
+last_credit_pull_d <- strsplit(as.character(loans$last_credit_pull_d), "-")
+
+last_credit_pull_d.month <- vector(length=length(last_credit_pull_d))
+
+last_credit_pull_d.year <- vector(length=length(last_credit_pull_d))
+
+for(i in 1:length(last_credit_pull_d)) {
+	last_credit_pull_d.month[i] <- last_credit_pull_d[[i]][1]
+	last_credit_pull_d.year[i] <- last_credit_pull_d[[i]][2]
+	}
+
+last_credit_pull_d.month <- ifelse(last_credit_pull_d.month == "Jan", 0/12, 
+			ifelse(last_credit_pull_d.month == "Feb", 1/12, 
+			ifelse(last_credit_pull_d.month == "Mar", 2/12, 
+			ifelse(last_credit_pull_d.month == "Apr", 3/12, 
+			ifelse(last_credit_pull_d.month == "May", 4/12, 
+			ifelse(last_credit_pull_d.month == "Jun", 5/12, 
+			ifelse(last_credit_pull_d.month == "Jul", 6/12, 
+			ifelse(last_credit_pull_d.month == "Aug", 7/12, 
+			ifelse(last_credit_pull_d.month == "Sep", 8/12, 
+			ifelse(last_credit_pull_d.month == "Oct", 9/12, 
+			ifelse(last_credit_pull_d.month == "Nov", 10/12, 11/12)))))))))))
+
+last_credit_pull_d.year <- as.numeric(last_credit_pull_d.year)
+
+loans$last_credit_pull_d <- 2016.0 - (last_credit_pull_d.month + last_credit_pull_d.year)
+
+
+loans$issue_month <- as.factor(ifelse(grepl("Jan", loans$issue_d), "Jan", 
+				ifelse(grepl("Feb", loans$issue_d), "Feb", 
+				ifelse(grepl("Mar", loans$issue_d), "Mar", 
+				ifelse(grepl("Apr", loans$issue_d), "Apr", 
+				ifelse(grepl("May", loans$issue_d), "May", 
+				ifelse(grepl("Jun", loans$issue_d), "Jun", 
+				ifelse(grepl("Jul", loans$issue_d), "Jul", 
+				ifelse(grepl("Aug", loans$issue_d), "Aug", 
+				ifelse(grepl("Sep", loans$issue_d), "Sep", 
+				ifelse(grepl("Oct", loans$issue_d), "Oct", 
+				ifelse(grepl("Nov", loans$issue_d), "Nov", "Dec"))))))))))))
+
+
+
+bad_zip_codes <- c()
+
+for (i in unique(loans$zip_code)) {
+	if(sum(loans$zip_code == i & loans$default == "1") > 300) {
+		bad_zip_codes <- c(bad_zip_codes, i)
+		}
+	}
+
+loans$bad_zip_code <- as.factor(ifelse(loans$zip_code %in% bad_zip_codes, 1, 0))
+
+
+
+bad_states <- c()
+
+for(i in unique(loans$addr_state)) {
+	if(sum(loans$addr_state == i & loans$default == "1")/sum(loans$addr_state == i) > 0.08) {
+		bad_states <- c(bad_states, i)
+		}
+	}
+
+
+
+loans$bad_state <- as.factor(ifelse(loans$addr_state %in% bad_states, 1, 0))
+
+
+
+loans$own_or_mortgage <- as.factor(ifelse(loans$home_ownership == "OWN" | loans$home_ownership == "MORTGAGE", 1, 0))
+
+loans$emp_more_2_years <- as.factor(ifelse(loans$emp_length == "n/a" | loans$emp_length == "< 1 year" | loans$emp_length == "1 year" | loans$emp_length == "2 years", 0, 1))
+
+loans$not_fully_funded <- as.factor(ifelse(loans$loan_amnt - loans$funded_amnt > 0, 1, 0))
+
+loans$not_fully_inv_funded <- as.factor(ifelse(loans$funded_amnt - loans$funded_amnt_inv > 0, 1, 0))
+
+loans$last_pymnt_lower_installment <- as.factor(ifelse(loans$last_pymnt_amnt - loans$installment < 0, 1, 0))
+
+
+
+loans$out_prncp_vs_income <- loans$out_prncp / loans$annual_inc
+
+loans$loan_amnt_vs_income <- loans$loan_amnt / loans$annual_inc
+
+loans$installment_vs_income <- loans$installment / loans$annual_inc
+
+
+
+loans$pct_prncp_rec <- loans$total_rec_prncp / loans$loan_amnt
+
+
+
+loans$low_pct_prncp_rec <- as.factor(ifelse(loans$pct_prncp_rec < 0.5, 1, 0))
+
+
+
+drops <- c(drops, "loan_status", "last_credit_pull_d", "funded_amnt", "funded_amnt_inv", "installment", "emp_length", "home_ownership", "zip_code", "addr_state", "issue_d", "last_pymnt_amnt", "out_prncp", "total_rec_prncp", "pct_prncp_rec")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+bad_purposes <- NULL
+
+for (i in unique(loans$purpose)) {
+	if ((sum(loans$purpose == i & loans$default == "1")/sum(loans$purpose == i)) > 0.10) {
+		bad_purposes <- c(bad_purposes, i)
+		}
+	}
+
+loans$bad_purpose <- as.factor(ifelse(loans$purpose %in% bad_purposes, 1, 0))
+
+
+first_half <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun")
+
+loans$issued_first_half <- as.factor(ifelse(loans$issue_month %in% first_half, 1, 0))
+
+
+loans$verified <- as.factor(ifelse(loans$verification_status == "Not Verified", 0, 1))
+
+
+drops <- c("region", "purpose", "issue_month", "verification_status")
+
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+drops <- c(drops, "loan_amnt_vs_income", "record")
+
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+proc.time() - ptm
+
+# new bit:
+
+loans <- select(loans, -not_fully_inv_funded)
+
+
+```
+
+
+*******************************************************************************************************************
+*******************************************************************************************************************
+*******************************************************************************************************************
+*******************************************************************************************************************
+*******************************************************************************************************************
+
+# II. Feature selection
+
+In order to perform k-nearest neighbours classification there are several decisions we have to make about the data. Firstly there is the question of feature selection--that is, which variables should be used in the classification process. As discussed in ESL, kNN can break down in high dimensions (and our data is fairly high-dimensional, the cleaned data set having over 30 variables). 
+
+We will try two different approaches to fixing the problem of high-dimensionality: first, we will simply restrict ourselves to using the variables which were selected to build the decision tree. In the second approach we will use all of the variables but impose a kind of weighting on the results using the kknn package.
+
+In addition to feature selection, there are two other related issues: how to appropriately scale the data (given that we have both continuous and categorical variables), and which distance metric to use.
+
+It is important to scale the data because many of the variables have different natural scales (and furthermore some variables are categorical while others are continuous). For example, annual income is typically on the order of $10,000$ to $100,000$ whereas interest rate is between $0$ and $30$. So, using the standard Euclidean distance metric, a difference of $ \$10 $ in annual income has as much effect as a difference of $ 10\% $ in interest rate, even though we know the latter difference is far more significant.
+
+In effect, if we failed to scale the data, it would be as though we were ignoring or placing very little weight on variables which have a relatively small scale. To illustrate this, consider the following example:
+
+
+```{r eval=FALSE}
+
+# choose three variables, and calculate distances
+
+set.seed(1)
+sample <- sample(nrow(loans), 10)
+three_vars <- select(loans[sample, ], c(annual_inc, int_rate, dti))
+(three_vars.distances <- dist(three_vars))
+
+# calculate distances using just one variable
+
+set.seed(1)
+sample <- sample(nrow(loans), 10)
+one_var <- select(loans[sample, ], annual_inc)
+(one_var.distances <- dist(one_var))
+
+```
+
+We see that the distances computed using the three variables annual income, interest rate, and dti are almost identical to the distances computed using annual income alone.
+
+As explained in ESL (ch. 14), a general form of the distance metric is given by:
+
+$$D(x_a, x_b) = \sum_{j=1}^p d_j(x_{aj}, x_{bj})$$
+
+If the data are all numeric, then the most common choice is $d_j(x_{ja}, x_{jb}) = (x_{ja} - x_{jb})^2$ for all $j$. In our case however there are factors and numerics. There is an issue of interpretability here. Normally, we could set $L_{rr'} = \delta_{rr'}$ for the factors; but since the factors only take two values, this is actually equivalent to the squared difference. Thus we will simply use Euclidean distance.
+
+At the end of the report we will investigate two alternative types of metrics: one is a metric where each $d_j$ is weighted by the inverse of the relative importance of attribute $X_j$ (so that less important variables are ``pushed'' further away), and the other is the so-called ``adaptive nearest neighbors'' method of Friedman and Hastie-Tibshirani.
+
+So we now scale the data. Since we are using a $0-1$ metric for the factors, they do not need to be scaled.
+
+```{r}
+
+# first scale just the numeric columns
+
+loans2 <- select(loans, get_numeric_cols(loans))
+loans2 <- as.data.frame(scale(loans2))
+
+# then add the factor columns back in
+
+for (i in get_factor_cols(loans)) {
+  loans2[i] <- loans[i]
+}
+
+# now make everything (including the factors) numeric
+
+loans2 <- as.data.frame(sapply(loans2, as.numeric))
+
+# finally we need to reconvert the default attribute to a factor:
+
+loans2$default <- as.factor(loans2$default-1)
+
+```
+
+In order to investigate the aforementioned ``curse of dimensionality'', let's see what happens when we calculate distances using an increasing number of variables:
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+avg_distance <- NULL
+sd_distances <- NULL
+
+for (k in c(2,))
+set.seed(1)
+sample <- sample(nrow(loans2), 10000)
+
+loans.train <- loans2[sample, ]
+
+ptm <- proc.time()
+
+distances <- dist(loans.train)
+
+proc.time() - ptm
+
+# dist(x = "euclidean") for now
+# etc.
+
+loans3 <- select(loans, get_numeric_cols(loans))
+loans3 <- as.data.frame(scale(loans3))
+
+set.seed(1)
+sample <- sample(nrow(loans3), 10000)
+
+loans.train <- loans3[sample, ]
+
+distances <- dist(loans.train)
+
+
+loans4 <- select(loans, c(int_rate, out_prncp_vs_income, low_pct_prncp_rec, annual_inc, total_rec_late_fee))
+loans4 <- as.data.frame(sapply(loans4, as.numeric))
+loans4 <- as.data.frame(scale(loans4))
+
+
+set.seed(1)
+sample <- sample(nrow(loans4), 10000)
+loans.train <- loans4[sample, ]
+ptm <- proc.time()
+distances <- dist(loans.train)
+proc.time() - ptm
+
+# plot these
+# p <- ggpplot(aes(x = , y = )) + geom_scatter()
+
+
+```
+
+We can see how the average distance between points grows as the number of features included increases. When we use all of the features, each point in the feature space is very far away from every other point, and there is less variation in distances.
+#CURSE
+
+
+# III. Sample size considerations
+
+Another issue we need to consider is how large a sample size to use. The kNN algorithm is rather computationally expensive: for $N$ observations, calculating the distances between every pair of observations involves $\left( \begin{array} N \\ 2 \end{array} \right) = (1/2)(n^2 - n)$ calculations (because the distance function is symmetric, i.e. $d(x,y) = d(y,x)$). 
+
+So the time complexity of this procedure is $O(n^2)$--this means that, for large $n$, the time taken is approximately proportional to $n^2$. (cf references on time complexity, also time complexity for kNN algorithm)
+
+Below we investigate how computation time scales with the number of rows. Of course, the exact time taken will vary depending on the specific machine used to run this code, but this should give an idea of scaling.
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+# see how the computation time scales with number of rows
+
+time <- NULL
+
+for (N in seq(10000, 40000, 10000)) {
+  set.seed(N)
+  sample <- sample(nrow(loans2), N)
+  loans.sample <- select(loans2[sample, ], -default)
+  ptm <- proc.time()
+  distances <- dist(loans.sample)
+  time <- c(time, proc.time()-ptm)
+}
+
+# plot these
+
+```
+
+OK, do definitely include a brief discussion of the fact that kNN is an instance-based classifier cf https://sci2s.ugr.es/keel/pdf/algorithm/articulo/wilson2000.pdf
+
+https://stats.stackexchange.com/questions/27013/finding-weights-for-variables-in-knn
+"The "training" in a kNN algorithm is simply storing the training data along with their classes (kNN is a lazy learning algorithm - we identify the actual class the the object we try to classify belongs to only upon obtaining this object)."
+
+Given the way the computation time scales with $N$, a sample size of more than $100,000$ or so would probably prove to be too time-consuming. I will try $N = 50,000$, as this should still be a sufficiently large sample.
+
+[Of course, we also care about the time taken to make predictions given new data...]
+
+
+As mentioned, we will first perform the classification using only the variables selected in the decision tree.
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+# select those variables used in the decision tree
+
+loans3 <- select(loans2, c(int_rate, out_prncp_vs_income, total_rec_int, 
+                          total_pymnt, low_pct_prncp_rec, default))
+
+
+```
+
+As discussed above we will make a training set consisting of $N = 50000$ rows:
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+set.seed(2)
+train <- sample(nrow(loans3), 50000)
+loans.train <- loans3[train, ]
+loans.test <- loans3[-train, ]
+
+```
+
+Now we select $k$. The metric we use will be the AUC of the classifier on the test data. We use this rather than accuracy because, as discussed previously, we care about the mix of true positives and true negatives our classifier produces.
+
+To save ourselves a bit of computation time, we can use a fairly small sample of the data to choose k (the reason we can do this is that it makes no difference what sample we use to 'train' the model on ... by the nature of the kNN algorithm)
+
+Then we will use the larger ("full") sample to actually compute the predictions.
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+kNN_aucs <- NULL
+
+# find the AUC from different values of k 
+
+ptm <- proc.time()
+
+for (k in seq(210,310,50)) {
+  set.seed(k)
+  kNN <- train(form = default ~ ., data = loans.train, 
+               method = 'knn', tuneGrid = expand.grid(.k=k), 
+               metric = 'Accuracy')
+  
+  kNN_probs <- predict(kNN, newdata=loans.test, type="prob")[,2]
+  
+  kNN_roc <- roc(response = loans.test$default, predictor = kNN_probs)
+  
+  kNN_aucs <- c(kNN_aucs, kNN_roc$auc)
+}
+
+
+proc.time() - ptm
+
+# this zeroes in around 220
+
+
+# a basic plot:
+
+k <- seq(10, 200, 10)
+
+plot(k, kNN_aucs)
+
+```
+
+We see that the AUC tends to stabilise around $k = 100$. It is still increasing thereafter but at quite a slow rate. We can confirm that the AUC starts to decrease eventually by choosing a relatively large value of $k$, e.g. $k = 400$:
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+# confirm that larger k is less useful:
+
+set.seed(3)
+kNN <- train(form = default ~ ., data = loans.train, 
+               method = 'knn', tuneGrid = expand.grid(.k=400), 
+               metric = 'Accuracy')
+kNN_probs <- predict(kNN, newdata=loans.test, type="prob")[,2]
+kNN_roc <- roc(response = loans.test$default, predictor = kNN_probs)
+
+
+```
+
+Thus given computational considerations (tradeoff) we'll use $k = 101$. 
+
+```{r}
+
+#grab it, k=101
+#kNN_fit, roc etc.
+
+```
+
+Now we will keep $k = 101$ fixed and create a classifier using all of the variables. 
+
+In this case, we will use the so-called weighted nearest neighbours method. This gives a weighting to each observation in the neighbourhood according to its distance, with observations further away being weighted more heavily. This has the effect of ``stretching'' points that are far away and pulling in points that are closer, and this can alleviate to an extent the curse of dimensionality discussed earlier.
+
+```{r kknn, eval=FALSE, warning=FALSE, message=FALSE}
+
+set.seed(2)
+train <- sample(nrow(loans2), 50000)
+loans.train <- loans2[train, ]
+loans.test <- loans2[-train, ]
+
+ptm <- proc.time()
+
+knn_fit <- kknn(default ~ ., loans.train, loans.test, k = 101, distance = 2, kernel = "triweight")
+
+proc.time() - ptm
+
+# this takes about 40 minutes so fair warning
+
+# grab the probabilities
+
+```
+
+(Explain a bit about how wKNN works. Extension: basing probabilities off weighted distance too. So rather than, blah).
+
+Finally, using $k=101$ again, we'll do kNN using the absolute value ($L^1$) metric.
+
+```{r}
+
+#quick abs. val. fit
+
+```
+
+So our final classifier is (kNN with k = 100 and x predictors). As before, we evaluate this model by applying it to the test data and looking at the ROC curve (note that the word 'model' is used loosely here).
+
+```{r Final classifier, eval=FALSE, warning=FALSE, message=FALSE}
+
+set.seed(5)
+sample <- sample(nrow(loans3), 10000)
+loans.sample <- loans3[sample,]
+
+
+set.seed(4)
+kNN <- train(form = default ~ ., data = loans.sample, 
+               method = 'knn', tuneGrid = expand.grid(.k=100), 
+               metric = 'Accuracy')
+
+set.seed(2)
+train <- sample(nrow(loans3), 50000)
+loans.train <- loans3[train, ]
+loans.test <- loans3[-train, ]
+
+
+kNN_preds <- predict(kNN, newdata=loans.test, type="prob")[,2]
+kNN_roc <- roc(response = loans.test$default, predictor = kNN_preds)
+
+# check that this is the same?
+
+
+set.seed(4)
+
+ptm <- proc.time()
+
+kNN <- train(form = default ~ ., data = loans.train, 
+               method = 'knn', tuneGrid = expand.grid(.k=100), 
+               metric = 'Accuracy')
+
+kNN_preds <- predict(kNN, newdata=loans.test, type="prob")[,2]
+
+kNN_roc <- roc(response = loans.test$default, predictor = kNN_preds)
+
+proc.time() - ptm
+
+plot.roc(kNN_roc, print.auc = TRUE)
+
+```
+
+This is reasonably good. (Compare AUC with logit.)
+
+Now we write a function that takes in some new data and returns predictions.
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+kNN_fit <- function(data, formula, k, seed=2) {
+	set.seed(seed)
+	kNN <- train(form = formula, data = data, 
+               method = 'knn', tuneGrid = expand.grid(.k=k), 
+               metric = 'Accuracy')
+	return(kNN)
+}
+
+
+kNN <- kNN_fit(data = loans.train, formula = default ~ ., k = 100)
+
+kNN_probs <- predict(kNN, newdata=loans.test, type="prob")[,2]
+
+# above doesn't seem to really work (or wait maybe it does)
+
+get_predictions <- function(data, attribute, predictor, predictor_type) {
+	if (predictor_type == "tree") {}
+	else if (predictor_type == "logit") {}
+	else if (predictor_type == "kNN") {}
+	else { print("Unknown object type") }
+}
+
+# plot roc ... then what?!
+
+#new data (OK)
+
+```
+
+
+
+
+Adaptive nearest neighbours described in (Friedman and Hastie-Tibshirani). 
+(see also:)
+https://cs.gmu.edu/~carlotta/publications/cvpr.pdf
+
+So here's an implementation of the DANN metric:
+
+```{r DANN, eval=FALSE, warning=FALSE, message=FALSE}
+
+# this function calculates the k nearest points to the query point x_0
+# this is just like the standard kNN procedure
+
+nhd <- function(x_0, data, k = 50) {
+  library(mefa)
+  
+  # if  # rows is less than # of neighbours, then the neighbourhood is just the whole dataset
+  if (nrow(data) < k) return(rownames(data))
+  
+  # turn the query point x_0 into a matrix using rep() from mefa library
+  x_0 <- rep(x_0, nrow(data))
+  
+  # calculate Euclidean distances between each point in the data and x_0
+  dists <- rowSums((data - x_0)^2)
+  
+  # another way of doing this: grab the diag of as.matrix(data - x_0) %*% t(data-x_0)
+  
+  # return the first k distances, i.e. the closest k neighbours to x_0
+  return(sort(dists)[1:k])
+}
+
+nhd(loans4[1,], loans4[100:200,])
+
+
+DANN_metric <- function(x, x_0, data, outcome, K_M = 50, epsilon=1) {
+  library(DiscriMiner)
+  data(data)
+  
+  # calculate the K_M-nearest neighbours using the standard Euclidean metric
+  nhd_names <- names(nhd(x_0, select(data, -outcome), K_M))
+  nhd <- select(data, nhd_names)
+  
+  # calculate the within and between class covariance in this nhd
+  W <- withinCov(select(nhd,-outcome), nhd[,outcome])
+  B <- betweenCov(select(nhd,-outcome), nhd[,outcome])
+  
+  #B* = blah
+  #Sigma <- W %*% B # etc
+  
+  #return( as.matrix(x - x_0) %*% Sigma %*% t(x - x_0) )
+  
+  # we also need a weight function k():
+  h <- max(dist(initial_nhd - x_0))
+  k <- function(x_i, x_0, Sigma, h) return((1 - h[i])/h^3)
+  
+}
+
+# the below function calculates the k nearest neighbors of a point x_0 using the DANN metric
+
+DANN_nhd <- function(data, x_0, k) {
+  dists <- DANN_metric(data, x_0, data, k, epsilon=1)
+  return(sort(dists)[1:k])
+}
+
+
+# just something to note: in DANN_metric you can have x as a multi-row data frame
+# after calc'ing nhd, do x_0 <- rep(x_0, nrow(x)) 
+# and then, to get the distances, i *think* doing as.matrix(x - x_0) %*% Sigma %*% t(x - x_0) works...? just select the diagonal?
+
+```
+
+Another metric we could use is one which weights the variables by their relative importance:
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+weighted_euclidean <- function(data, weights) {
+  x <- NULL
+  for (w in weights) x <- c(x, rep(w, dim(data)[1]))
+  data.dist <- dist(data*sqrt(x))
+  return(data.dist)
+}
+
+```
+
+So for example we could use 1/importance for the weights of each attribute. This is somewhat similar to the idea of adaptive nearest neighbours, but it is less ``sensitive'' because it involves a global weighting of variables, whereas the adaptive nearest neighbours technique weights variables locally based on the amount of variation in a neighbourhood of the query point.
+
+Let's compute some examples of this.
+
+```{r eval=FALSE, warning=FALSE, message=FALSE}
+
+# compute distances
+
+```
+

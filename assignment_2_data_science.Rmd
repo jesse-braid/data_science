@@ -1,0 +1,732 @@
+---
+title: "Assignment 2"
+author: "Jesse Braid"
+date: "15 November 2018"
+output: pdf_document
+---
+
+# 1. Cleaning and function creation
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+We first load in the data and clean it to the point of the previous assignment.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(pROC)
+library(glmnet)
+setwd("C:/Users/jpbra/Desktop/uni/SEM4/data science/assignments")
+loans <- read.csv("loan.csv")
+```
+
+I will create some functions which help to automate the process of data cleaning.
+
+```{r message=FALSE, warning=FALSE}
+
+# this function displays the number of unique values in each column
+
+num_unique_vals <- function(data) {
+  for (i in colnames(data)) {
+    print(paste(i, "has", dim(unique(data[i]))[[1]], "unique value(s)", sep=" "))
+  }
+}
+
+
+# this function returns the names of all columns containing NAs
+
+get_NA_cols <- function(data) {
+  NA_cols <- NULL
+  for (i in colnames(data)) {
+	  if (sum(is.na(data[i])) > 0) {
+		  NA_cols <- c(NA_cols, i)
+		}
+  }
+  return(NA_cols)
+}
+
+# the function below displays the number of NAs in each column
+# this will be useful when deciding what to do with NAs
+
+num_NAs_by_col <- function(data) {
+  for (i in get_NA_cols(data)) {
+    print(paste(sum(is.na(loans[i])), "NAs in", i, sep=" "))
+  }
+}
+
+```
+
+In general, there are three possible ways to deal with NAs: we can delete columns containing NA's, we can delete rows contain NA's, or we can "impute" NAs.
+
+Our approach here is the following: if a given column contains a small fraction of NA's (say, less than 10% of the column consists of NA's), we simply delete rows which have NA's in that column. On the other hand, if a column has a large fraction of NA's (e.g. more than 50% of the column consists of NA's), we simply remove the whole column, unless the NA's in that column are informative.
+
+Let's write some functions which automate this process.
+
+```{r}
+
+# if a column has a small fraction of NA's, remove the corresponding rows:
+
+drop_small_NAs <- function(data) {
+  drops <- NULL
+  for (i in get_NA_cols(data)) {
+    if (sum(is.na(data[i]))/dim(data)[[1]] < 0.1) {
+      # drop the smalls
+      # do i need to do here complete.cases(col's with small NA's) ?
+    }
+  }
+}
+
+# drop columns with lots of NA's:
+
+drop_big_NAs <- function(data) {
+  drops <- NULL
+  for (i in get_NA_cols(data)) {
+    if (sum(is.na(data[i]))/dim(data)[[1]] > 0.5) {
+      drops <- c(drops, i)
+    }
+  }
+}
+
+```
+
+For "intermediate" cases (columns with a fraction of NA's between 10% and 50%), the choice of what do to is essentially a judgement call and is context dependent. 
+
+We'll write one more function which removes any columns which have only one value.
+
+```{r}
+
+# drops columns with only one value
+
+drop_single_vals <-function(data) {
+  drops <- NULL
+  for (i in colnames(data)) {
+    if (sum(unique(data[i])) == 1) {
+      drops <- c(drops, i)
+    }
+  }
+  data <- data[, !(names %in% drops)]
+}
+
+
+```
+
+We now proceed with cleaning the data.
+
+```{r Basic cleaning, echo=FALSE, warning=FALSE, message=FALSE}
+
+# basic cleaning
+
+# first, convert these "important" NA's (judgement call)
+
+loans$delinq <- as.factor(ifelse(is.na(loans$mths_since_last_delinq), 0, 1))
+loans$record <- as.factor(ifelse(is.na(loans$mths_since_last_record), 0, 1))
+loans$major_derog <- as.factor(ifelse(is.na(loans$mths_since_last_major_derog), 0, 1))
+
+
+# drop the following "irrelevant" columns... (context dependent)
+
+loans <- select(loans, -c(id, member_id, url, desc, title))
+
+
+
+##############################################
+
+#the below are "big NA" columns i believe: (so we can just use my drop_big_NAs() function)
+
+drops <- c("annual_inc_joint", "dti_joint", "verification_status_joint", "tot_coll_amt", "tot_cur_bal", "open_acc_6m", "open_il_6m", "open_il_12m", "open_il_24m", "total_bal_il", "il_util", "open_rv_12m", "open_rv_24m", "max_bal_bc", "all_util", "inq_fi", "total_rev_hi_lim", "mths_since_rcnt_il", "total_cu_tl", "inq_last_12m")
+drops <- c(drops, "mths_since_last_delinq", "mths_since_last_record", "mths_since_last_major_derog")
+loans <- loans[ , !(names(loans) %in% drops)]
+NA_cols <- NA_cols[!(NA_cols %in% drops)]
+
+
+#these are "highly correlated" columns:
+
+drops <- c(drops, "out_prncp_inv", "total_pymnt_inv")
+drops <- c(drops, "grade", "sub_grade")
+
+
+#this is a column with only value:
+
+drops <- c(drops, "policy_code")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+
+
+# now below we're dropping ROWS: so... use the small_NAs function
+loans <- loans[complete.cases(loans), ]
+
+
+##############################################
+
+
+# and finally... i dunno, we need to remove these things
+logical <- loans$last_credit_pull_d == "" | loans$earliest_cr_line == "" | loans$annual_inc == 0
+loans <- loans[!logical, ]
+drops_extra <- c("next_pymnt_d", "last_pymnt_d", "emp_title")
+loans <- loans[ , !(names(loans) %in% drops_extra)]
+
+```
+
+Then, as before, we create some new variables:
+
+```{r Variable creation, echo=FALSE, message=FALSE, warning=FALSE}
+
+# create a default attribute
+
+good_indicators <- c("Current", "Issued", "Fully Paid", "Does not meet the credit policy. Status:Fully Paid")
+loans$default <- as.factor(ifelse(loans$loan_status %in% good_indicators, 0, 1))
+drops <- c(drops, "recoveries", "collection_recovery_fee")
+loans <- loans[ , !(names(loans) %in% drops)]
+loans$out_prncp <- loans$loan_amnt - loans$total_rec_prncp
+
+# convert dates
+
+earliest_cr_line <- strsplit(as.character(loans$earliest_cr_line), "-")
+earliest_cr_line.month <- vector(length=length(earliest_cr_line))
+earliest_cr_line.year <- vector(length=length(earliest_cr_line))
+
+for(i in 1:length(earliest_cr_line)) {
+	earliest_cr_line.month[i] <- earliest_cr_line[[i]][1]
+	earliest_cr_line.year[i] <- earliest_cr_line[[i]][2]
+}
+
+earliest_cr_line.month <- ifelse(earliest_cr_line.month == "Jan", 0/12, 
+			ifelse(earliest_cr_line.month == "Feb", 1/12, 
+			ifelse(earliest_cr_line.month == "Mar", 2/12, 
+			ifelse(earliest_cr_line.month == "Apr", 3/12, 
+			ifelse(earliest_cr_line.month == "May", 4/12, 
+			ifelse(earliest_cr_line.month == "Jun", 5/12, 
+			ifelse(earliest_cr_line.month == "Jul", 6/12, 
+			ifelse(earliest_cr_line.month == "Aug", 7/12, 
+			ifelse(earliest_cr_line.month == "Sep", 8/12, 
+			ifelse(earliest_cr_line.month == "Oct", 9/12, 
+			ifelse(earliest_cr_line.month == "Nov", 10/12, 11/12)))))))))))
+
+earliest_cr_line.year <- as.numeric(earliest_cr_line.year)
+earliest_cr_line <- earliest_cr_line.month + earliest_cr_line.year
+
+issue_d <- strsplit(as.character(loans$issue_d), "-")
+issue_d.month <- vector(length=length(issue_d))
+issue_d.year <- vector(length=length(issue_d))
+
+for(i in 1:length(issue_d)) {
+	issue_d.month[i] <- issue_d[[i]][1]
+	issue_d.year[i] <- issue_d[[i]][2]
+}
+
+issue_d.month <- ifelse(issue_d.month == "Jan", 0/12, 
+			ifelse(issue_d.month == "Feb", 1/12, 
+			ifelse(issue_d.month == "Mar", 2/12, 
+			ifelse(issue_d.month == "Apr", 3/12, 
+			ifelse(issue_d.month == "May", 4/12, 
+			ifelse(issue_d.month == "Jun", 5/12, 
+			ifelse(issue_d.month == "Jul", 6/12, 
+			ifelse(issue_d.month == "Aug", 7/12, 
+			ifelse(issue_d.month == "Sep", 8/12, 
+			ifelse(issue_d.month == "Oct", 9/12, 
+			ifelse(issue_d.month == "Nov", 10/12, 11/12)))))))))))
+
+issue_d.year <- as.numeric(issue_d.year)
+issue_d <- issue_d.month + issue_d.year
+loans$earliest_cr_line <- issue_d - earliest_cr_line
+
+last_credit_pull_d <- strsplit(as.character(loans$last_credit_pull_d), "-")
+last_credit_pull_d.month <- vector(length=length(last_credit_pull_d))
+last_credit_pull_d.year <- vector(length=length(last_credit_pull_d))
+
+for(i in 1:length(last_credit_pull_d)) {
+	last_credit_pull_d.month[i] <- last_credit_pull_d[[i]][1]
+	last_credit_pull_d.year[i] <- last_credit_pull_d[[i]][2]
+}
+
+last_credit_pull_d.month <- ifelse(last_credit_pull_d.month == "Jan", 0/12, 
+			ifelse(last_credit_pull_d.month == "Feb", 1/12, 
+			ifelse(last_credit_pull_d.month == "Mar", 2/12, 
+			ifelse(last_credit_pull_d.month == "Apr", 3/12, 
+			ifelse(last_credit_pull_d.month == "May", 4/12, 
+			ifelse(last_credit_pull_d.month == "Jun", 5/12, 
+			ifelse(last_credit_pull_d.month == "Jul", 6/12, 
+			ifelse(last_credit_pull_d.month == "Aug", 7/12, 
+			ifelse(last_credit_pull_d.month == "Sep", 8/12, 
+			ifelse(last_credit_pull_d.month == "Oct", 9/12, 
+			ifelse(last_credit_pull_d.month == "Nov", 10/12, 11/12)))))))))))
+
+last_credit_pull_d.year <- as.numeric(last_credit_pull_d.year)
+loans$last_credit_pull_d <- 2016.0 - (last_credit_pull_d.month + last_credit_pull_d.year)
+
+loans$issue_month <- as.factor(ifelse(grepl("Jan", loans$issue_d), "Jan", 
+				ifelse(grepl("Feb", loans$issue_d), "Feb", 
+				ifelse(grepl("Mar", loans$issue_d), "Mar", 
+				ifelse(grepl("Apr", loans$issue_d), "Apr", 
+				ifelse(grepl("May", loans$issue_d), "May", 
+				ifelse(grepl("Jun", loans$issue_d), "Jun", 
+				ifelse(grepl("Jul", loans$issue_d), "Jul", 
+				ifelse(grepl("Aug", loans$issue_d), "Aug", 
+				ifelse(grepl("Sep", loans$issue_d), "Sep", 
+				ifelse(grepl("Oct", loans$issue_d), "Oct", 
+				ifelse(grepl("Nov", loans$issue_d), "Nov", "Dec"))))))))))))
+
+
+# separate zip codes and states into two categories, good and bad
+
+bad_zip_codes <- c()
+
+for (i in unique(loans$zip_code)) {
+	if(sum(loans$zip_code == i & loans$default == "1") > 300) {
+		bad_zip_codes <- c(bad_zip_codes, i)
+		}
+}
+
+loans$bad_zip_code <- as.factor(ifelse(loans$zip_code %in% bad_zip_codes, 1, 0))
+
+# separate states into good and bad
+
+bad_states <- c()
+
+for(i in unique(loans$addr_state)) {
+	if(sum(loans$addr_state == i & loans$default == "1")/sum(loans$addr_state == i) > 0.08) {
+		bad_states <- c(bad_states, i)
+		}
+}
+
+loans$bad_state <- as.factor(ifelse(loans$addr_state %in% bad_states, 1, 0))
+
+
+# make some more categorical variables etc
+
+loans$own_or_mortgage <- as.factor(ifelse(loans$home_ownership == "OWN" | loans$home_ownership == "MORTGAGE", 1, 0))
+loans$emp_more_2_years <- as.factor(ifelse(loans$emp_length == "n/a" | loans$emp_length == "< 1 year" | loans$emp_length == "1 year" | loans$emp_length == "2 years", 0, 1))
+loans$not_fully_funded <- as.factor(ifelse(loans$loan_amnt - loans$funded_amnt > 0, 1, 0))
+loans$not_fully_inv_funded <- as.factor(ifelse(loans$funded_amnt - loans$funded_amnt_inv > 0, 1, 0))
+loans$last_pymnt_lower_installment <- as.factor(ifelse(loans$last_pymnt_amnt - loans$installment < 0, 1, 0))
+loans$out_prncp_vs_income <- loans$out_prncp / loans$annual_inc
+loans$loan_amnt_vs_income <- loans$loan_amnt / loans$annual_inc
+loans$installment_vs_income <- loans$installment / loans$annual_inc
+loans$pct_prncp_rec <- loans$total_rec_prncp / loans$loan_amnt
+loans$low_pct_prncp_rec <- as.factor(ifelse(loans$pct_prncp_rec < 0.5, 1, 0))
+
+# drop old columns
+
+drops <- c(drops, "loan_status", "last_credit_pull_d", "funded_amnt", "funded_amnt_inv", "installment", "emp_length", "home_ownership", "zip_code", "addr_state", "issue_d", "last_pymnt_amnt", "out_prncp", "total_rec_prncp", "pct_prncp_rec")
+
+loans <- loans[ , !(names(loans) %in% drops)]
+
+```
+
+In order to perform a logistic regression the predictors have to be continuous or dichotomous (e.g. 0 and 1). So we first convert the factors with more than 2 levels to dichotomous factors.
+
+Let's first write a simple function to return all columns which are factors with more than two levels:
+
+```{r}
+
+# first, are there factors with more than two levels?
+
+exist_multi_factors <- function(data) {
+  for (i in colnames(data)) {
+    if (is.factor(eval(parse(text=paste("data$", i, sep = "")))) 
+        & length(unique(eval(parse(text=paste("data$", i, sep = ""))))) > 2  ) {
+      return(TRUE)
+      }
+    return(FALSE)
+    }
+  }  
+
+# now, write a function to display all factor columns with more than two levels
+
+display_multi_factors <- function(data) {
+  for (i in colnames(data)) {
+    if (is.factor(eval(parse(text=paste("data$", i, sep = "")))) & length(unique(eval(parse(text=paste("data$", i, sep = ""))))) > 2  ) {
+      print(i)
+    }
+  }
+}
+
+# run the function on loans
+
+exist_multi_factors(loans)
+
+display_multi_factors(loans)
+
+
+```
+
+We see that three columns have factors with more than two levels. We start with 'purpose':
+
+```{r message=FALSE, warning=FALSE}
+
+# list the default rate of each purpose
+
+for (i in unique(loans$purpose)) {
+	cat(i, "default rate:", sum(loans$purpose == i & loans$default == "1")/sum(loans$purpose == i), sep=" ", fill=TRUE)
+}
+
+```
+
+Let's separate purposes into those with default rates greater than 10% and those less than 10%:
+
+```{r message=FALSE, warning=FALSE}
+
+bad_purposes <- NULL
+
+for (i in unique(loans$purpose)) {
+	if ((sum(loans$purpose == i & loans$default == "1")/sum(loans$purpose == i)) > 0.10) {
+		bad_purposes <- c(bad_purposes, i)
+		}
+	}
+
+loans$bad_purpose <- as.factor(ifelse(loans$purpose %in% bad_purposes, 1, 0))
+
+```
+
+Now we inspect default rates by issue month:
+
+```{r message=FALSE, warning=FALSE}
+
+# list default rates by issue month
+
+for (i in unique(loans$issue_month)) {
+	cat(i, "default rate:", sum(loans$issue_month == i & loans$default == "1")/sum(loans$issue_month == i), sep=" ", fill=TRUE)
+}
+
+```
+
+Curiously, it seems that loan default rates are highest for loans issued at the start of the calendar year, and steadily decrease throughout the year.
+
+So we make the following split:
+
+```{r message=FALSE, warning=FALSE}
+
+first_half <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun")
+
+loans$issued_first_half <- as.factor(ifelse(loans$issue_month %in% first_half, 1, 0))
+
+```
+
+We note that these splits are somewhat arbitrary, but our aim is to create a predictor which has a high proportion of defaulters.
+
+Finally we lump together the "Source Verified" and "Verified" statuses, and then delete the old columns:
+
+```{r message=FALSE, warning=FALSE}
+
+loans$verified <- as.factor(ifelse(loans$verification_status == "Not Verified", 0, 1))
+
+loans <- select(loans, -c(purpose, issue_month, verification_status))
+
+```
+
+Now let's look at the correlation structure. If there are highly correlated variables, we might drop them.
+
+```{r message=FALSE, warning=FALSE}
+
+loans2 <- as.data.frame(sapply(loans, as.numeric))
+
+c <- cor(loans2)
+
+colnames(c) <- 1:39
+rownames(c) <- 1:39
+
+corrplot(c)
+```
+
+It looks like installment_vs_income and loan_amnt_vs_income are very highly correlated, as are record and pub_rec. But given that there are so many variables, it's slightly hard to read the graph. So we will manually extract the column pairs that are highly correlated.
+
+```{r message=FALSE, warning=FALSE}
+
+# extract pairs of columns with a correlation greater than some specified level
+
+extract_correlated_cols <- function(data, rho) {
+  # tryCatch(is.numeric(data), c <- cor(data))
+  c <- cor(data)
+  cols <- NULL
+  for (i in 2:dim(c)[1]) {
+    for (j in seq(1,i-1,1)) {
+      if (abs(c[i,j]) > rho) {
+        print(paste(i,j))
+      }
+    }
+  }
+  return(cols)
+}
+
+extract_correlated_cols(loans2, rho = 0.75)
+
+```
+
+So we see that (23, 11) and (35, 34) are the only variables with correlation greater than $0.75$. Let's drop these variables:
+
+```{r message=FALSE, warning=FALSE}
+
+loans <- select(loans, -c(loan_amnt_vs_income, record))
+
+```
+
+Since we are interested in how well the model performs on new customers, we split the data into training and test subsets:
+
+```{r message=FALSE, warning=FALSE}
+
+# make a training set consisting of 70% of the rows from the original data set
+
+set.seed(2)
+train = sample(nrow(loans), floor(0.7*nrow(loans)))
+loans.train = loans[train, ]
+loans.test = loans[-train, ]
+
+# or as  a function:
+
+make_training_set <- function(data, size, seed=1) {
+  set.seed(seed)
+  train = sample(nrow(data), floor(size*nrow(data)))
+  return(data[train, ])
+}
+
+
+```
+
+We fit the logistic regression model on the training data, and test its accuracy on the test data. We will fit a few different models and compare their accuracies.
+
+First we fit a model using all of the predictors:
+
+```{r message=FALSE, warning=FALSE}
+
+glm.big <- glm(default ~ ., data=loans.train,family = binomial, maxit=100)
+summary(glm.big)
+
+```
+
+Next we fit a model using only those predictors which have significant coefficients in the above model (at the $\alpha = 0.01$ significance level):
+
+```{r message=FALSE, warning=FALSE}
+
+# use all of the predictors except for the "insignificant" ones
+
+glm.sig_vars <- glm(default ~ . - delinq_2yrs - revol_bal - acc_now_delinq - delinq - bad_zip_code, data=loans.train, family=binomial, maxit=100)
+summary(glm.sig_vars)
+
+```
+
+Finally, we fit a model using only those predictors which were used to build the decision tree, namely: total_rec_late_fee, out_prncp_vs_income, int_rate, initial_list_status, last_pymnt_lower_installment, issue_month (which becomes issued_first_half here), and total_pymnt.
+
+```{r message=FALSE, warning=FALSE}
+
+glm.tree_vars <- glm(default ~ int_rate + out_prncp_vs_income + total_rec_late_fee + initial_list_status + last_pymnt_lower_installment + issued_first_half + total_pymnt, data=loans.train, family=binomial, maxit=100)
+summary(glm.tree_vars)
+
+```
+
+As mentioned in ESL, the more appropriate way to select predictors in a logistic regression is to sequentially remove predictors which contribute the least to the difference in deviance. However, this is quite computationally expensive. We will write a function which does this (and test that the function works).
+
+```{r}
+
+best_subset <- function(data, outcome, length=1) {
+  regressors <- colnames(data)
+  while (length(regressors) > length) {
+    # minus_regressor_deviance <- list()
+    # for (x in regressors) {
+    #   fit <- glm()
+    #   minus_regressor_deviance <- VLAH
+    #  }
+    # drop = min(mins_regressor_deviance)
+    # regressors = regressors - drop
+    # (ties?)
+  }
+  return(regressors)
+}
+
+```
+
+This function finds the ``best'' subset of predictors to use in a logistic regression, where the length of the subset is specified by the user. 
+
+For example, if we called 
+
+```{r eval=FALSE}
+
+best_subset(loans.train, default, length = dim(loans.train)[[2]]-2)
+
+```
+
+this would find the best subset of predictors of length 34 (one less than number of total predictors available). It would do this by removing one predictor at a time, fitting a logistic regression, and calculating the deviance. It would then find whichever predictor caused the greatest reduction in deviance, and remove that from the list of predictors.
+
+There are other criteria we could use for deciding which subset of predictors is the ``best''. For example, we could choose the subset of predictors that minimises the Akaike Information Criterion (AIC), or that minimises the Bayesian Information Criterion (BIC), etc. In this case, we simply try every possible subset of predictors, and return the best one:
+
+```{r, AIC}
+
+best_subset <- function(data, outcome, length=1) {
+  regressors <- colnames(data)
+  while (length(regressors) > length) {
+    # minus_regressor_deviance <- list()
+    # for (x in regressors) {
+    #   fit <- glm()
+    #   minus_regressor_deviance <- VLAH
+    #  }
+    # drop = min(mins_regressor_deviance)
+    # regressors = regressors - drop
+    # (ties?)
+  }
+  return(regressors)
+}
+
+```
+
+A final point on selection of predictors: L1 regularisation. (glmnet)
+
+Now we know that the model using all the predictors will have the best accuracy on the training data, since the accuracy can't decrease when we include more predictors. However, what we are really interested in is the accuracy on the test data. It is possible that the model using all the predictors is "overfit" and could perform relatively poorly on the test data. We examine this now.
+
+First, we compute predicted probabilities of default on the test data:
+
+```{r message=FALSE, warning=FALSE}
+
+glm.big.probs <- predict(glm.big, loans.test, type="response")
+glm.sig_vars.probs <- predict(glm.sig_vars, loans.test, type="response")
+glm.tree_vars.probs <- predict(glm.tree_vars, loans.test, type="response")
+
+```
+
+We convert the probabilities to predictions by saying that if the probability is greater then some threshold level $T$, the prediction is default, and otherwise the prediction is no default.
+
+A reasonably conservative value for the threshold is $T = 0.1$, but of course this can be varied as desired:
+
+```{r message=FALSE, warning=FALSE}
+# set the threshold
+
+T <- 0.1
+
+# convert probabilities to classifications
+
+pred.big <- as.factor(ifelse(glm.big.probs > T, "1", "0"))
+pred.sig_vars <- as.factor(ifelse(glm.sig_vars.probs > T, "1", "0"))
+pred.tree_vars <- as.factor(ifelse(glm.tree_vars.probs > T, "1", "0"))
+```
+
+To see how accurate these models are, we can look at a confusion matrix:
+
+```{r message=FALSE, warning=FALSE}
+
+# use the table function to see how we did
+
+table(Predicted = pred.big, Actual = loans.test$default)
+table(Predicted = pred.sig_vars, Actual = loans.test$default)
+table(Predicted = pred.tree_vars, Actual = loans.test$default)
+
+```
+
+Now we calculate the overall accuracy:
+
+```{r message=FALSE, warning=FALSE}
+
+(accuracy.big <- mean(loans.test$default == pred.big))
+(accuracy.sig_vars <- mean(loans.test$default == pred.sig_vars))
+(accuracy.tree_vars <- mean(loans.test$default == pred.tree_vars))
+
+```
+
+The accuracy is fairly good for all three models, but we note that we could get an even higher accuracy by using the "no information" classifier (classifying everything as no default).
+Thus we need to look at not just the overall accuracy but the proportion of defaulters correctly classified and the proportion of non-defaulters correctly classified (sensitivity and specificity, respectively).
+
+```{r message=FALSE, warning=FALSE}
+
+# calculate sensitivity and specificity for big model
+
+(sensitivity.big <- sum(loans.test$default == "1" & loans.test$default == pred.big)/sum(loans.test$default == "1"))
+(specificity.big <- sum(loans.test$default == "0" & loans.test$default == pred.big)/sum(loans.test$default == "0"))
+
+```
+
+So 63% of defaulters are correctly classified by the big model, and 80.21% of non-defaulters are correctly classified by it. Similarly for the other two models we have:
+
+```{r message=FALSE, warning=FALSE}
+
+# sensitivity and specificity of sig vars model
+
+(sensitivity.sig_vars <- sum(loans.test$default == "1" & loans.test$default == pred.sig_vars)/sum(loans.test$default == "1"))
+(specificity.sig_vars <- sum(loans.test$default == "0" & loans.test$default == pred.sig_vars)/sum(loans.test$default == "0"))
+
+# sensitivity and specificity of tree vars model
+
+(sensitivity.tree_vars <- sum(loans.test$default == "1" & loans.test$default == pred.tree_vars)/sum(loans.test$default == "1"))
+(specificity.tree_vars <- sum(loans.test$default == "0" & loans.test$default == pred.tree_vars)/sum(loans.test$default == "0"))
+```
+
+We see that the "big" model (using all of the predictors) is the best of the three in terms of overall accuracy as well as sensitivity and specificity. Second-best was the model using just the tree variables, and last the model using the significant variables.
+
+We can automate the above process with a function that takes in a user-specified threshold and glm model and displays the sensitivity, specificity, and overall accuracy of the model:
+
+```{r}
+
+model_accuracy <- function(model, threshold=0.4) {
+  # print()
+  # print()
+}
+
+  
+```
+
+The above analysis was just for one choice of threshold. We now see what kinds of combinations of sensitivity and specificity we can get using as we vary the threshold over all possible values.
+
+```{r}
+
+roc.test.big <- roc(response = loans.test$default, predictor = glm.big.probs)
+roc.test.sig_vars <- roc(response = loans.test$default, predictor = glm.sig_vars.probs)
+roc.test.tree_vars <- roc(response = loans.test$default, predictor = glm.tree_vars.probs)
+
+plot.roc(roc.test.big, col = "blue", print.auc = T)
+
+plot.roc(roc.test.sig_vars, col = "red", print.auc = T, 
+         add = TRUE, print.auc.x = .5, print.auc.y = .45)
+
+plot.roc(roc.test.tree_vars, col = "green", print.auc = T, 
+         add = TRUE, print.auc.x = .5, print.auc.y = .4)
+
+legend("right", legend = c("All vars", "Sig vars", "Tree vars"), fill = c("blue", "red", "green"))
+
+```
+
+As mentioned, these curves show all the different possible combinations of sensitivity and specificity that can be achieved as the threshold is varied.
+
+An overall measure of the quality of the model is the area under the ROC curve (AUC). We see that the big model has the highest AUC, followed by the model using the tree variables, and lastly the model using the "significant" variables.
+
+If the only thing we cared about was accuracy, we would choose the big model, since it has the highest AUC; however, we also care about simplicity and ease of interpretation of the model. 
+Given that the model using the tree variables is so much simpler and is almost as good as the model using all the variables, this is the model we will present to management.
+
+As a final point, it may be instructive to compare the AUCs from the models' prediction on the training data to those from the test data:
+
+```{r}
+
+roc.train.big <- roc(response = loans.train$default, predictor = predict(glm.big, loans.train, type="response"))
+
+roc.train.sig_vars <- roc(response = loans.train$default, predictor = predict(glm.sig_vars, loans.train, type="response"))
+
+roc.train.tree_vars <- roc(response = loans.train$default, predictor = predict(glm.tree_vars, loans.train, type="response"))
+
+# train AUCs
+
+roc.train.big$auc
+
+roc.train.sig_vars$auc
+
+roc.train.tree_vars$auc
+
+# test AUCs 
+
+roc.test.big$auc
+
+roc.test.sig_vars$auc
+
+roc.test.tree_vars$auc
+
+# plot these
+
+```
+
+We see that the AUCs decreased for each model when applied to the test data, as typically happens. However, the difference between the train AUC and the test AUC was quite minimal, possibly reflecting the fact that the training data set was large. Furthermore, the ranking of the models remained the same (that is, the big model was the best on the training data and on the test data; the tree variables model was second-best on the training data and on the test data).
+
+Few quick things
+*(comment on neg coefficients etc --> confounding)
+*interaction terms?
+
+#done
+
+# PREDICT function ! ! !
